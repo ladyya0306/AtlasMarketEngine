@@ -1,0 +1,59 @@
+{
+  "release_name": "AtlasMarketEngine Research Release",
+  "scope": "Public evidence summary derived from internal verification batch",
+  "source_batch_name": "forced_role_batch_20260412_m3_reconfirm",
+  "source_batch_publication_policy": "raw run package removed from public repo; only derived public evidence retained",
+  "months": 3,
+  "run_count": 9,
+  "pass_gate_count": 9,
+  "fail_gate_count": 0,
+  "groups": {
+    "V1": {
+      "pass_runs": 3,
+      "total_runs": 3,
+      "long_test_ready": true
+    },
+    "V2": {
+      "pass_runs": 3,
+      "total_runs": 3,
+      "long_test_ready": true
+    },
+    "V3": {
+      "pass_runs": 3,
+      "total_runs": 3,
+      "long_test_ready": true
+    }
+  },
+  "public_sample_cases": [
+    {
+      "case": "V1_s606_m3_a50",
+      "group": "V1",
+      "seed": 606,
+      "transactions_total": 12,
+      "transactions_m3": 6,
+      "avg_price": 4238841.88,
+      "for_sale_inventory_now": 33,
+      "active_participants_now": 35
+    },
+    {
+      "case": "V2_s606_m3_a50",
+      "group": "V2",
+      "seed": 606,
+      "transactions_total": 13,
+      "transactions_m3": 10,
+      "avg_price": 4124498.03,
+      "for_sale_inventory_now": 30,
+      "active_participants_now": 35
+    },
+    {
+      "case": "V3_s606_m3_a50",
+      "group": "V3",
+      "seed": 606,
+      "transactions_total": 15,
+      "transactions_m3": 8,
+      "avg_price": 3893170.0,
+      "for_sale_inventory_now": 29,
+      "active_participants_now": 33
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+simulation:
+  enable_intervention_panel: false
+  preplanned_interventions:
+    - month: 2
+      action_type: developer_supply
+      zone: B
+      count: 6
+      template: b_entry_level
+    - month: 4
+      action_type: population_add
+      count: 8
+      tier: lower_middle
+      template: young_first_home
+      income_multiplier_min: 0.9
+      income_multiplier_max: 1.05
+    - month: 7
+      action_type: income_shock
+      tier_adjustments:
+        - tier: middle
+          pct_change: 0.06
+        - tier: upper_middle
+          pct_change: 0.03

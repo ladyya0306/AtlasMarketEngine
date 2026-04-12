@@ -1,0 +1,32 @@
+# Force CI Refresh
+[tool.isort]
+profile = "black"
+line_length = 200
+skip = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    "_archive_unused_scripts",
+    "build",
+    "dist"
+]
+
+[tool.ruff]
+line-length = 200
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    "_archive_unused_scripts",
+    "build",
+    "dist"
+]
+
+[tool.ruff.lint]
+ignore = ["E203"]
+
+[tool.pytest.ini_options]
+norecursedirs = ["_archive_unused_scripts", ".git", "node_modules"]
+testpaths = ["tests"]

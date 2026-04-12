@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+<defs><linearGradient id="g" x1="0" x2="1"><stop offset="0%" stop-color="#0f172a"/><stop offset="100%" stop-color="#132238"/></linearGradient></defs>
+<rect width="1600" height="900" fill="url(#g)"/>
+<text x="90" y="110" fill="#ffffff" font-size="54" font-family="Segoe UI, Arial" font-weight="700">AtlasMarketEngine</text>
+<text x="90" y="160" fill="#93a8c5" font-size="28" font-family="Segoe UI, Arial">Controlled housing-market simulation for balanced, buyer, and seller scenarios</text>
+<rect x="90" y="230" width="430" height="250" rx="24" fill="#101b2d" stroke="#24324b"/>
+<rect x="585" y="230" width="430" height="250" rx="24" fill="#101b2d" stroke="#24324b"/>
+<rect x="1080" y="230" width="430" height="250" rx="24" fill="#101b2d" stroke="#24324b"/>
+<text x="130" y="290" fill="#4ade80" font-size="30" font-family="Segoe UI, Arial" font-weight="700">What it proves</text>
+<text x="130" y="340" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Controlled market-state reproduction</text>
+<text x="130" y="385" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Directionally correct shock response</text>
+<text x="130" y="430" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Shared transaction chain kept intact</text>
+<text x="625" y="290" fill="#60a5fa" font-size="30" font-family="Segoe UI, Arial" font-weight="700">How it works</text>
+<text x="625" y="340" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Persona-driven supply / demand shaping</text>
+<text x="625" y="385" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Candidate funnel and competition controls</text>
+<text x="625" y="430" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Resume-ready month-to-month simulation</text>
+<text x="1120" y="290" fill="#fbbf24" font-size="30" font-family="Segoe UI, Arial" font-weight="700">Public release boundary</text>
+<text x="1120" y="340" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Research Release, not the full commercial stack</text>
+<text x="1120" y="385" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Natural activation remains a research mode</text>
+<text x="1120" y="430" fill="#e2e8f0" font-size="24" font-family="Segoe UI, Arial">• Public repo keeps derived evidence only</text>
+<rect x="90" y="560" width="1420" height="220" rx="24" fill="#0f1a2a" stroke="#24324b"/>
+<text x="130" y="625" fill="#ffffff" font-size="34" font-family="Segoe UI, Arial" font-weight="700">Why this matters for a public release</text>
+<text x="130" y="680" fill="#dbe7f5" font-size="25" font-family="Segoe UI, Arial">The repo is open enough to be credible, but narrow enough to protect deeper governance rules, raw evidence packs, and commercial scenario layers.</text>
+<text x="130" y="730" fill="#93a8c5" font-size="22" font-family="Segoe UI, Arial">Recommended reading order: README → public evidence summary → Scholar CLI guide → code entrypoint.</text>
+</svg>

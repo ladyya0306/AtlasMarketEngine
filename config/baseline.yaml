@@ -1,0 +1,746 @@
+# ============================================
+# 🏠 Real Estate Simulation - 基准配置文件 (baseline.yaml)
+# ============================================
+# 说明：本文件定义了模拟系统的所有参数。
+# 原则：
+# 1. [系统控制]: 代码强制执行的硬规则
+# 2. [LLM上下文]: 注入Prompt作为背景，LLM自主决策
+# 3. [LLM建议]: 作为建议告知LLM，但不强制执行
+# ============================================
+
+# ====== 1. 基础模拟参数 ======
+simulation:
+  # [系统控制] Agent数量
+  # 后果: 数量越多模拟越真实，但计算越慢。推荐100用于调试，1000+用于仿真。
+  agent_count: 50
+
+  # [V2新增] 全局Agent配置
+  agent:
+    # 储蓄率 (月收入的40%存入现金)
+    savings_rate: 0.4
+    # 收入调整系数 (1.0=正常, 0.9=全员降薪10%)
+    income_adjustment_rate: 1.0
+
+  # [系统控制] 模拟持续月数
+  # 后果: 决定模拟的时间跨度。推荐 12-60 个月。
+  months: 12
+  # [系统控制] 是否启用月末人工干预面板（Gate/夜跑建议 false）
+  enable_intervention_panel: true
+
+  # [系统控制] 随机种子
+  # 说明: null表示每次结果随机；固定整数结果可复现。
+  random_seed: null
+  # [系统控制] 模拟基准年份（用于房龄计算）
+  base_year: 2026
+  # [系统控制] 回归门槛：每场景最少成交笔数
+  min_transactions_gate: 3
+  # [系统控制] 低成交自动放宽候选池，避免错配导致交易冻结
+  low_tx_auto_relax_enabled: true
+
+# ====== 2. 市场配置 (Market) ======
+market:
+  # [系统控制] 区域定义与房价基准
+  zones:
+    A:  # 核心区
+      # [系统控制] 基础单价 (元/平米)
+      base_price_per_sqm: 35000
+      # [系统控制] 价格随机波动范围
+      price_range: [30000, 45000]
+
+      # 🆕 [系统控制] 单价区间配置 (¥/㎡)
+      # 说明：用于房产生成时的单价定价，优先级高于 price_range
+      price_per_sqm_range:
+        min: 32000  # 核心区最低单价
+        max: 40000  # 核心区最高单价
+
+      # 🆕 [系统控制] 分档定价 (可选，用于精细化控制不同户型)
+      # 说明：根据建筑面积自动匹配价格档位
+      price_tiers:
+        premium: [36000, 40000]  # 豪宅/大户型 (>120㎡)
+        standard: [32000, 36000]  # 标准户型 (80-120㎡)
+        budget: [26000, 32000]  # 刚需小户型 (<80㎡)
+
+      # [系统控制] 学区房比例
+      school_district_ratio: 0.3
+      # [系统控制] 按价格带的学区房比例（优先于全局 school_district_ratio）
+      school_district_ratio_by_band:
+        low: 0.18
+        mid: 0.30
+        high: 0.45
+      # [系统控制] 供给价格带比例（用于避免房源集中在同一总价带）
+      supply_band_ratio:
+        low: 0.25
+        mid: 0.50
+        high: 0.25
+      # [系统控制] 地段稀缺度输入因子（0~1；输入原因，不是结果指标）
+      location_factors:
+        education_resource_density: 0.82
+        job_accessibility: 0.88
+        transport_accessibility: 0.85
+        core_location_scarcity: 0.92
+      # [系统控制] 初始房产数量分布 (品质1=老破小, 2=普通, 3=豪宅)
+      property_count:
+        quality_1: 30
+        quality_2: 50
+        quality_3: 20
+
+    B:  # 非核心区
+      base_price_per_sqm: 15000
+      price_range: [12000, 20000]
+
+      # 🆕 [系统控制] 单价区间配置 (¥/㎡)
+      price_per_sqm_range:
+        min: 10000  # 非核心区最低单价
+        max: 20000  # 非核心区最高单价
+
+      # 🆕 [系统控制] 分档定价
+      price_tiers:
+        premium: [18000, 20000]  # 豪宅/大户型
+        standard: [14000, 18000]  # 标准户型
+        budget: [10000, 14000]  # 刚需小户型
+
+      school_district_ratio: 0.1
+      # [系统控制] 按价格带的学区房比例（优先于全局 school_district_ratio）
+      school_district_ratio_by_band:
+        low: 0.05
+        mid: 0.10
+        high: 0.22
+      # [系统控制] 供给价格带比例（用于保证B区对刚需有承接）
+      supply_band_ratio:
+        low: 0.45
+        mid: 0.40
+        high: 0.15
+      # [系统控制] 地段稀缺度输入因子（0~1；输入原因，不是结果指标）
+      location_factors:
+        education_resource_density: 0.48
+        job_accessibility: 0.42
+        transport_accessibility: 0.50
+        core_location_scarcity: 0.35
+      property_count:
+        quality_1: 80
+        quality_2: 100
+        quality_3: 20
+
+  # [系统控制] 初始挂牌率
+  # 后果: 影响系统启动时的市场供给量。0.05表示5%的房产初始在售。
+  initial_listing_rate: 0.05
+
+  # [V2新增] 恐慌抛售阈值
+  # 说明: 连续3个月价格跌幅超过此值触发恐慌
+  panic_sell_threshold: -0.05
+
+  # [系统控制] 房龄画像（用于初始化建成年份）
+  # 说明：quality_1 通常更老，quality_3 通常更新。
+  property_age_profile:
+    A:
+      quality_1: { min_age: 22, max_age: 38 }
+      quality_2: { min_age: 10, max_age: 24 }
+      quality_3: { min_age: 1, max_age: 12 }
+    B:
+      quality_1: { min_age: 18, max_age: 32 }
+      quality_2: { min_age: 8, max_age: 20 }
+      quality_3: { min_age: 1, max_age: 10 }
+
+# ====== 3. Agent人群分层 (Agent Tiers) ======
+agent_tiers:
+  # [系统控制] 收入阶层定义 (年收入边界)
+  boundaries:
+    ultra_high: 1000000    # >100万
+    high: 500000           # >50万
+    middle: 200000         # >20万
+    lower_middle: 100000   # >10万
+    low: 0                 # <10万
+
+  # [系统控制] 人群分布比例
+  # 说明: 定义社会的贫富结构
+  distribution:
+    ultra_high: 1          # 1% 顶豪
+    high: 9                # 9% 富裕
+    middle: 30             # 30% 中产
+    lower_middle: 40       # 40% 工薪
+    low: 20                # 20% 困难
+
+  # [系统控制] 初始财富配置
+  initial_wealth:
+    ultra_high:
+      cash_ratio: [5, 20]        # 现金 = 年收入 * 倍数
+      property_count: [3, 6]     # 持房数量
+    high:
+      cash_ratio: [3, 10]
+      property_count: [1, 3]
+    middle:
+      cash_ratio: [1, 5]
+      property_count: [0, 2]
+    lower_middle:
+      cash_ratio: [0.5, 3]
+      property_count: [0, 1]
+    low:
+      cash_ratio: [0, 1]
+      property_count: [0, 0]
+
+# ====== 4. 房产分配策略 ======
+property_allocation:
+  # [系统控制] 分配策略
+  strategy: "value_descending"
+  # [系统控制] 学区房溢价
+  school_premium: [1.15, 1.30]
+
+# ====== 5. 决策因子 (Decision Factors) ======
+decision_factors:
+  # [系统控制] Agent激活逻辑
+  activation:
+    # 基础月度激活率 (0.3%的人每个月会想买卖房)
+    base_probability: 0.003
+    # 宏观环境
+    macro_volatility: 0.1
+    risk_free_rate: 0.025  # 🆕 无风险利率 (2.5%)
+
+    # 租赁市场默认配置 🆕
+    rental:
+      zone_a_rent_per_sqm: 100  # A区每平米租金 (元/月)
+      zone_b_rent_per_sqm: 60  # B区每平米租金 (元/月)
+
+    # [系统控制] 无房且现金低于该阈值者不参与交易激活 (元)
+    # 说明: 该阈值可由CLI新建模拟时覆盖
+    min_cash_observer_no_property: 500000
+    # [系统控制] 激活阶段LLM批大小（越大越省token，但单次请求更重）
+    batch_size: 50
+    # [系统控制] 激活前预筛规则（仅用于减少调用，不替代LLM决策）
+    pre_filter:
+      hard_only: true
+      normal:
+        min_cash: 300000
+        min_income: 20000
+      market_pulse:
+        min_cash: 100000
+        min_income: 15000
+
+    # 权重因子 (逻辑硬编码，数值在此调整)
+    weights:
+      has_school_age_child: 0.15
+      recently_married: 0.12
+      high_income_growth: 0.08
+      multi_property_holder: 0.10
+      high_wealth_no_property: 0.20
+      low_cash_poor: -0.5
+
+    # [LLM上下文] 激活因子的自然语言描述 (用于Prompt)
+    context_hints:
+      has_school_age_child: "孩子到了上学年龄，急需学区房，买房意愿极强。"
+      recently_married: "刚结婚组建家庭，需要稳定的婚房，属于刚性需求。"
+      high_income_growth: "近期收入大幅增长，如果你还没有房，现在是置业的好时机。"
+      multi_property_holder: "你持有这套非自住房产，如果价格合适，可以考虑套现离场。"
+      high_wealth_no_property: "你手头现金充足但名下无房，为了资产保值，你应该考虑买入。"
+      low_cash_poor: "你手头现金非常紧张，不仅买不起房，甚至可能需要卖房求生。"
+
+  # [系统控制] 交易超时与降价规则
+  buyer_timeout_months: 3
+  listing_stale_months: 2
+  auto_price_cut_rate: 0.05
+
+# ====== 6. 生活事件 (Life Events) ======
+life_events:
+  # [系统控制] 每月事件触发概率（先代码抽样，不触发则不调用LLM）
+  monthly_event_trigger_prob: 0.25
+  # [系统控制] 仅在事件已触发时是否调用LLM生成解释文本
+  llm_reasoning_enabled: true
+  # [系统控制] 事件池
+  # 说明: 定义随机生活事件及其财务影响
+  pool:
+    - event: "升职加薪"
+      cash_change: 0.2
+      buy_tendency: 0.3
+      sell_tendency: 0.0
+    - event: "年终奖"
+      cash_change: 0.15
+      buy_tendency: 0.2
+      sell_tendency: 0.0
+    - event: "结婚"
+      cash_change: 0.0
+      buy_tendency: 0.5
+      sell_tendency: 0.0
+    - event: "生子"
+      cash_change: -0.1
+      buy_tendency: 0.4
+      sell_tendency: 0.0
+    - event: "降薪"
+      cash_change: -0.15
+      buy_tendency: -0.3
+      sell_tendency: 0.2
+    - event: "失业"
+      cash_change: -0.3
+      buy_tendency: -0.5
+      sell_tendency: 0.4
+    - event: "生病"
+      cash_change: -0.2
+      buy_tendency: -0.3
+      sell_tendency: 0.3
+    - event: "离婚"
+      cash_change: 0.0
+      buy_tendency: 0.0
+      sell_tendency: 0.5
+
+# ====== 7. 贷款与金融 (Mortgage) ======
+mortgage:
+  # [系统控制] 首付比例 (30%)
+  down_payment_ratio: 0.3
+  # [系统控制] 年利率 (3.5%)
+  annual_interest_rate: 0.035
+  # [系统控制] 贷款年限
+  loan_term_years: 30
+  # [系统控制] 最大还款收入比 (50%收入用于还贷)
+  max_dti_ratio: 0.5
+
+# ====== 7.1 交易成本 (Transaction Costs, M07) ======
+transaction_costs:
+  # 买方一次性成本 = 中介费 + 税费 + 杂费
+  buyer:
+    brokerage_ratio: 0.010   # 1.0%
+    tax_ratio: 0.007         # 0.7%
+    misc_ratio: 0.003        # 0.3%
+  # 卖方一次性成本 = 中介费 + 税费 + 杂费
+  seller:
+    brokerage_ratio: 0.010   # 1.0%
+    tax_ratio: 0.005         # 0.5%
+    misc_ratio: 0.002        # 0.2%
+
+# ====== 7. 宏观经济环境 (Macro Environment) ======
+macro_environment:
+  # [LLM上下文] 全局覆盖模式 (可选: optimistic, stable, pessimistic, null)
+  override_mode: null
+
+  # [LLM上下文] 月度环境计划
+  schedule:
+    1: stable
+    2: stable
+    3: optimistic  # 该月环境将注入LLM Prompt
+    4: optimistic
+    5: optimistic
+    6: stable
+    7: pessimistic
+    8: pessimistic
+    9: stable
+    10: stable
+    11: optimistic
+    12: optimistic
+
+  # 环境参数详细定义
+  parameters:
+    optimistic:
+      income_growth_rate: 0.05
+      buy_tendency_modifier: 0.2
+      # [LLM上下文] 宏观描述：直接决定LLM对大势的判断
+      llm_description: "【经济繁荣期】GDP高速增长，股市大涨，人人对未来充满信心。大家普涨看涨楼市，买家唯恐踏空。"
+      price_expectation: 0.03  # 预期涨幅
+
+    stable:
+      income_growth_rate: 0.02
+      buy_tendency_modifier: 0.0
+      llm_description: "【经济平稳期】经济运行正常，就业稳定。楼市供需平衡，价格波动不大，适合按需购买。"
+      price_expectation: 0.0
+
+    pessimistic:
+      income_growth_rate: -0.02
+      buy_tendency_modifier: -0.2
+      llm_description: "【经济衰退期】失业率上升，企业裁员。市场弥漫恐慌情绪，大家捂紧钱包不敢消费，楼市面临下行压力。"
+      price_expectation: -0.05
+
+# ====== 8. 谈判参数 (Negotiation) ======
+negotiation:
+  # [系统控制] 谈判轮数区间
+  # 说明: 减少轮数可加快模拟速度；2-3轮符合真实场景。
+  rounds_range: [2, 3]
+
+  # [系统控制] 裁判模式（可选）
+  # 说明：开启后单次LLM裁决成交区间，减少多轮往返。默认关闭，不影响原流程。
+  arbiter_mode:
+    enabled: false
+    strict_price_range: true
+    prefer_midpoint_fallback: true
+
+  # [系统控制] 规则前置过滤阈值
+  # 说明: 只要 (最低价 - 买方上限) > 买方上限 * 20%，直接跳过谈判，节省时间。
+  heuristic_gap_threshold: 0.20
+
+  # [V2 新增] 谈判模式规则 (由Agent自主选择模式)
+  modes:
+    batch_bidding:
+      enabled: true
+      # 盲拍等待轮数 (目前简化为1轮)
+      rounds: 1
+      description: "盲拍模式：召集所有买家同台竞技，价高者得"
+
+    flash_deal:
+      enabled: true
+      rounds: 1
+      description: "闪电成交：一口价甩卖，迅速回笼资金"
+
+    classic:
+      enabled: true
+      description: "传统谈判：一对一讨价还价"
+
+  personality_weights:
+    aggressive: 0.30    # 激进型
+    conservative: 0.30  # 保守型
+    balanced: 0.40      # 平衡型
+    # [V2移除] desperate 已改为由 LLM 根据处境动态生成的 is_urgent 状态
+
+  # 市场状况参数 (根据供需比动态匹配)
+  market_conditions:
+    oversupply:  # 买方市场 (供 > 求)
+      threshold_ratio: 1.5
+      # [LLM建议] 建议买家砍价比例 (建议砍到 85%)
+      buyer_lowball: 0.82
+      # [LLM上下文] 市场提示语
+      llm_hint: "【买方市场】供过于求，满大街都是卖房的。你是大爷，尽管用力砍价，卖家如果不肯降价就直接走人，还有大把房子等你挑。"
+
+    undersupply:  # 卖方市场 (供 < 求)
+      threshold_ratio: 0.7
+      # [LLM建议] 建议买家出价比例 (95% - 100%)
+      buyer_lowball: 1.00
+      llm_hint: "【卖方市场】一房难求，几十个人抢一套房。房东非常强势，你要么接受高价，要么加价抢，犹豫一秒房子就没了。"
+
+    balanced:    # 均衡市场
+      # [LLM建议] 建议买家出价比例 (90%)
+      buyer_lowball: 0.93
+      llm_hint: "【均衡市场】供需基本平衡。价格比较透明，双方都能理性沟通，你可以试着还价，但不要太离谱。"
+
+# ====== 9. 系统设置 (System) ======
+system:
+  # [预留] LLM成本控制
+  llm:
+    max_calls_per_month: 200
+    enable_caching: true
+    cache_max_size: 2000
+    # [P1性能] LLM并发/限流/重试控制
+    max_concurrency_smart: 8
+    max_concurrency_fast: 16
+    qps_smart: 0.0   # 0=不限制
+    qps_fast: 0.0    # 0=不限制
+    timeout_seconds: 45
+    max_retries: 1
+    backoff_base_seconds: 0.4
+    breaker_fail_threshold: 8
+    breaker_cooldown_seconds: 20
+
+  # [系统控制] 市场公报渲染配置（不影响交易决策）
+  market_bulletin:
+    # 月末结算后是否生成LLM点评（研究批跑建议关闭以降耗）
+    post_settlement_llm_analysis_enabled: true
+    # 公报点评模型（fast/smart）
+    model_type: fast
+
+  # [系统控制] 报告生成模型路由（不影响交易决策）
+  reporting:
+    # Agent画像点评模型（fast/smart）
+    portrait_model_type: fast
+
+  # [系统控制] 输出配置
+  output:
+    results_dir: "results"
+    log_level: "INFO"
+
+# ====== 9.5 报告生成开关 ======
+reporting:
+  # [系统控制] 终局是否生成 Agent End Reports（研究批跑建议关闭以降耗）
+  enable_end_reports: true
+
+# ====== 10. 聪明Agent参数 (Smart Agent) ======
+smart_agent:
+  # [系统控制] Regime Engine V1 总开关（可一键回退）
+  # true: 启用“结算口径统一 + 谈判收敛 + 卖方上调释放 + 买家搜索节律”
+  # false: 完全回退到旧行为
+  regime_engine_v1_enabled: true
+  regime_v1_negotiation_convergence_enabled: true
+  regime_v1_reject_to_counter_close_priority_threshold: 68.0
+  regime_v1_reject_to_counter_near_floor_ratio: 0.98
+  regime_v1_price_reconsider_enabled: true
+  # [系统控制] 灰区路由：在不改主架构的前提下，让部分样本进入 E/F-only 轨道
+  regime_v1_raise_release_preforce_enabled: true
+  regime_v1_raise_release_force_sample_enabled: true
+  regime_v1_raise_release_force_sample_ratio: 0.10
+  regime_v1_raise_release_force_sample_min_hits_per_month: 1
+  regime_v1_raise_release_routing_mode: ratio
+  regime_v1_raise_release_topk_enabled: false
+  regime_v1_raise_release_topk: 0
+  regime_v1_raise_release_min_valid_bids_filter: 1
+  regime_v1_raise_release_min_outbid_filter: 1
+  regime_v1_raise_release_min_negotiation_filter: 1
+  regime_v1_raise_release_exclude_cold_zero_bid: true
+  # [系统控制] 热盘提价路由仅允许“有竞争证据”的挂牌进入（有效出价>=1 或 被抢单>=1）
+  regime_v1_raise_release_require_competition_evidence: true
+  # [系统控制] 连续N个月有效出价=0时，禁止E/F提价（冷盘不涨）
+  regime_v1_raise_release_zero_valid_bid_streak_block_months: 2
+  # [系统控制] 热盘上调硬护栏：热盘复核后仍不选E/F时，进入“E/F二选一”仲裁
+  regime_v1_raise_release_hard_guard_enabled: true
+  regime_v1_raise_release_min_valid_bids: 1
+  regime_v1_raise_release_min_outbid_losses: 0
+  regime_v1_raise_release_max_close_priority_score: 80.0
+  regime_v1_raise_release_default_e_coeff: 1.05
+  # [激进试验] 热盘卖家即使走规则路径也强制提价（用于先验证上限效果）
+  regime_v1_raise_force_rule_path_enabled: true
+  regime_v1_raise_force_rule_coeff: 1.05
+  # [激进试验] 允许热盘在更早月份进入LLM调价
+  regime_v1_raise_force_all_early_llm: true
+  # [系统控制] 卖方上调释放保护：在月度LLM配额里预留热盘名额，避免E/F被配额挤掉
+  regime_v1_raise_release_cap_reserved: 20
+  # [系统控制] 卖方上调释放保护：热盘最早可在挂牌第几个月进入LLM调价
+  regime_v1_raise_release_force_llm_min_duration: 1
+  regime_v1_buyer_search_rhythm_enabled: true
+  regime_v1_same_month_max_abandon_cycles: 2
+
+  # [系统控制] 开关与人数
+  enabled: true
+  ratio: 0.30
+  count: null  # 有值时优先于 ratio
+  # [系统控制] 卖家定价双轨：默认关闭普通卖家纯规则调价，让普通卖家也走 LLM 调价，
+  # 但使用“低信息 + 跟风”提示词与延迟市场视角，从而保持交易主链一致。
+  normal_seller_rule_pricing_enabled: false
+  # [系统控制] 挂牌调价的LLM调用控制（降低夜跑token/耗时）
+  price_adjustment_llm_enabled_for_smart: true
+  price_adjustment_llm_min_duration: 1
+  price_adjustment_monthly_llm_cap: 120
+  price_adjustment_llm_min_calls_per_month: 2
+  price_adjustment_rule_mild_cut: 0.96
+  price_adjustment_rule_deep_cut: 0.92
+  price_adjustment_rule_downtrend_cut: 0.95
+  # [P0 收敛] 惜售提价热度判定校准（用于 D/E 触发，不改成交硬约束）
+  price_adjustment_heat_medium_threshold: 0.16
+  price_adjustment_heat_high_threshold: 0.36
+  price_adjustment_heat_zone_mix_weight: 0.35
+  price_adjustment_heat_zone_match_norm: 16.0
+  price_adjustment_heat_zone_valid_bid_norm: 10.0
+  price_adjustment_heat_zone_negotiation_norm: 8.0
+  price_adjustment_heat_zone_outbid_norm: 6.0
+  price_adjustment_heat_property_floor_on_zone_hot: 0.14
+  # [系统控制] 仅对信息时滞组的热度补偿，防止延迟视角把热盘判成冷盘
+  regime_v1_hot_signal_lag_compensation_enabled: true
+  regime_v1_hot_signal_lag_compensation_medium_delta_base: 0.03
+  regime_v1_hot_signal_lag_compensation_medium_delta_scale: 0.04
+  regime_v1_hot_signal_lag_compensation_high_delta_base: 0.02
+  regime_v1_hot_signal_lag_compensation_high_delta_scale: 0.03
+  # [系统控制] 冷房信号：用于把“连续无人问津”的房源优先送入LLM调价评估
+  price_adjustment_cold_house_enabled: true
+  price_adjustment_cold_house_lookback_months: 2
+  price_adjustment_cold_house_no_match_streak: 2
+  price_adjustment_cold_house_min_duration_for_llm: 2
+  # [系统控制] 卖家卖房期限（用于“到期必须卖出”的显性沙盘机制）
+  seller_deadline_enabled: true
+  seller_deadline_min_months: 1
+  seller_deadline_max_months: 12
+  seller_deadline_urgent_range: [1, 3]
+  seller_deadline_balanced_range: [3, 6]
+  seller_deadline_patient_range: [6, 12]
+  # 到期硬清仓（代码规则）：到期月若仍未成交，系统会下探价格并强制出清
+  seller_deadline_hard_clear_enabled: true
+  # 调价层面的到期压缩幅度（规则调价/LLM回退都会参考）
+  seller_deadline_soft_cut_ratio: 0.90
+  seller_deadline_hard_cut_ratio: 0.75
+  # 到期强制出清时的价格下探区间（从 start 逐步下探到 floor）
+  seller_deadline_force_price_ratio: 0.88
+  seller_deadline_force_floor_ratio: 0.60
+  # 若仍找不到买家，继续进入“硬下探”区间（可接近骨折价）
+  seller_deadline_hard_floor_ratio: 0.01
+  seller_deadline_force_step_ratio: 0.05
+  # 到期仍无法成交时，启用“终局清仓价（0元）+真实买家过户”兜底，确保不出现假回购
+  seller_deadline_terminal_zero_price_enabled: true
+  # 到期被系统强制卖出时的额外惩罚（从卖家到手款中扣减）
+  seller_deadline_penalty_ratio: 0.08
+
+  # [系统控制] 多套交易上限
+  max_buys_per_month: 3
+  max_sells_per_month: 2
+
+  # [系统控制] 抢购机制
+  bid_aggressiveness: 0.5   # 0~1，越高越积极
+  tie_breaker_mode: random  # random / rotation
+  # [P0 收敛] 经典队列后段防偏置（B区刚需承接 + 抑制极端预算挤出）
+  classic_queue_high_headroom_penalty_enabled: true
+  classic_queue_high_headroom_threshold_ratio: 0.35
+  classic_queue_high_headroom_penalty_span: 0.70
+  classic_queue_high_headroom_penalty_max: 0.16
+  classic_queue_b_zone_entry_boost: 0.08
+  classic_queue_b_zone_entry_max_headroom_ratio: 0.25
+  classic_queue_b_zone_entry_min_budget_fit: 0.55
+  classic_queue_b_zone_entry_max_owned_properties: 1
+  # [P0 收敛] B区非学区型高预算买家轻度降权（只影响排序，不拦截）
+  classic_queue_b_zone_non_school_penalty_enabled: true
+  classic_queue_b_zone_non_school_min_headroom_ratio: 0.35
+  classic_queue_b_zone_non_school_penalty_span: 0.60
+  classic_queue_b_zone_non_school_penalty_max: 0.10
+  classic_queue_b_zone_non_school_owned_threshold: 1
+  # [P0 收敛] 批量竞价二次加价轮（只扩展价格发现轮次，不改成交硬约束）
+  batch_bidding_second_round_enabled: true
+  batch_bidding_second_round_min_candidates: 2
+  batch_bidding_second_round_top_n: 3
+
+  # [系统控制] 订单生命周期
+  order_ttl_days: 7
+  deposit_ratio: 0.10
+  settlement_delay_days: 15
+  breach_penalty_ratio: 0.05
+  effective_bid_floor_ratio: 0.93
+  precheck_include_tax_and_fee: true
+  precheck_liquidity_buffer_months: 3
+  settlement_liquidity_floor_months: 1
+  # [系统控制] 激活阶段批处理大小（优先级高于 decision_factors.activation.batch_size）
+  activation_batch_size: 50
+  # [系统控制] 仅做硬约束预筛（首付/DTI/在途订单等），不做偏好淘汰
+  activation_hard_only_prefilter: true
+  # [系统控制] 买方初筛灰区路由：仅决定 fast/smart 模型，不替代LLM选房决策
+  buyer_match_dual_routing_enabled: true
+  buyer_match_gray_score_threshold: 0.55
+  # [系统控制] 谈判灰区路由：仅决定 fast/smart 模型，不替代LLM谈判决策
+  negotiation_dual_routing_enabled: true
+  negotiation_gray_score_threshold: 0.55
+  # [系统控制] 买家候选房池大小与探索位
+  candidate_top_k: 5
+  candidate_exploration_slots: 1
+  candidate_max_k_on_fallback: 8
+  # [系统控制] 候选池分散参数（不替LLM选房，只让候选更分散、更可解释）
+  candidate_zone_min_slots: 1
+  candidate_price_band_min_slots: 1
+  candidate_tiebreak_noise: 0.015
+  candidate_score_weight_rule: 0.55
+  # [系统控制] 地段稀缺度输入分开关与权重（仅影响候选排序，不替LLM拍板）
+  location_scarcity_weight_enabled: true
+  location_scarcity_weight: 0.24
+  shortlist_location_bonus_weight: 0.25
+  # [系统控制] 跨区折价阈值：未达到阈值时，不鼓励因“便宜”跨区
+  cross_zone_discount_threshold: 0.35
+  candidate_soft_relax_school_enabled: true
+  # [系统控制] 月内重试：首次没选中时，允许在当月再尝试若干次（仍由LLM最终拍板）
+  monthly_retry_attempts: 10
+  monthly_retry_expand_top_k_step: 1
+  monthly_retry_ignore_zone_last_attempt: true
+  same_month_outbid_reflow_enabled: true
+  same_month_outbid_reflow_max_rounds: 16
+  # [系统控制] 普通买家备选位：允许“主选+1个备选”并行进入订单，降低一次失败即沉默
+  normal_buyer_backup_slots: 6
+  # [系统控制] 候选池前置限流：在进入 shortlist / LLM 选房前，对单套房月内候选曝光量设上限
+  candidate_quota_prefilter_enabled: true
+  candidate_quota_per_property_base: 3
+  candidate_quota_per_property_school_bonus: 1
+  candidate_quota_per_property_b_zone_bonus: 1
+  candidate_quota_buy_task_locked_extra: 0
+  candidate_shortlist_interest_weight: 0.45
+  candidate_selected_interest_weight: 1.2
+  # [系统控制] 拥挤感知：不同买家对热门房源的态度差异（追热/中性/避拥挤）
+  candidate_crowd_avoid_step: 0.05
+  candidate_crowd_follow_step: 0.03
+  candidate_crowd_pressure_scale: 1.0
+  # [系统控制] 拥挤治理：保底候选数 + 月内压力衰减（避免拥挤硬门控悬崖）
+  candidate_crowd_min_shortlist_keep: 1
+  candidate_inmonth_pressure_decay: 0.92
+  # [系统控制] 候选分散：热门房降权 + 冷门房加权（仅影响候选排序，不替LLM决策）
+  candidate_hotspot_lookback_months: 1
+  candidate_hotspot_hot_threshold: 3
+  candidate_hotspot_hot_max_units: 4.0
+  candidate_cold_bonus_units: 2.0
+  candidate_cold_listing_age_gate_months: 1
+  candidate_pressure_bonus_step: 0.05
+  candidate_pressure_bonus_cap: 3.0
+  # [系统控制] ROLE_DECISION降耗优化（仅做预路由，不替代LLM交易决策）
+  role_decision_optimization:
+    # 开启“不确定带路由”：低分直接OBSERVER，其他进入候选
+    enable_uncertainty_router: true
+    # 激活分数低于该值直接观望（减少无效LLM判定）
+    low_score_observer_threshold: 0.01
+    # 预留高分阈值（当前用于统计/后续扩展）
+    high_score_candidate_threshold: 0.08
+    # 稳定观察者冻结窗口：连续N月稳定观望后，短期内不再每月发ROLE_DECISION
+    enable_observer_freeze: true
+    observer_freeze_trigger_streak: 3
+    observer_freeze_window_months: 2
+    # 角色签名缓存：同签名在TTL内复用上月角色决策（带随机重评估保活）
+    enable_signature_cache: true
+    signature_cache_ttl_months: 1
+    signature_cache_random_recheck_ratio: 0.10
+    # 自适应批大小：按最近批次耗时自动调节ROLE_DECISION批量（慢则降，快则升）
+    adaptive_batch_size_enabled: true
+    adaptive_batch_min: 20
+    adaptive_batch_max: 60
+    adaptive_batch_step: 10
+    adaptive_latency_slow_seconds: 12.0
+    adaptive_latency_fast_seconds: 5.0
+    # 月内调用预算器：防止ROLE_DECISION在长跑中失控
+    monthly_budget_enabled: false
+    monthly_budget_calls: 200
+    # 触发预算后至少保留的候选比例（高分优先）
+    budget_min_keep_ratio: 0.10
+    # 灰区模型双路由：默认快模型，灰区样本升级主模型
+    enable_model_dual_routing: false
+    gray_score_lower: 0.02
+    gray_score_upper: 0.08
+    default_model_type: fast
+    gray_model_type: smart
+
+  # [系统控制] 长周期策略
+  max_wait_months: 6
+  panic_sell_drawdown: 0.15
+  take_profit_threshold: 0.20
+  info_delay_enabled: false
+  info_delay_ratio: 0.50
+  # [P0 收敛] 时滞强度可调（用于 R2B 强化）
+  info_delay_ratio_multiplier: 1.0
+  info_delay_min_months: 1
+  info_delay_apply_to_normal: false
+  info_delay_ratio_normal: 0.0
+  info_delay_max_months: 2
+  min_offer_ratio_to_list: 0.60
+  max_overbid_ratio_to_list: 0.30
+  max_negotiation_rounds_cap: 4
+  # [系统控制] 经典多人竞争中，若最高有效报价达到/超过挂牌价，自动成交（避免“高于挂牌仍拒绝”）
+  classic_competitive_auto_accept_at_list_enabled: true
+  max_holdings_in_downtrend: 6
+  max_downtrend_buys_per_month: 1
+  max_downtrend_sells_per_month: 1
+
+  # [系统控制] 学区价值随房龄衰减（避免老破小学区房被长期高估）
+  school_age_decay_start_year: 10
+  school_age_old_threshold: 20
+  school_age_decay_rate_mid: 0.015
+  school_age_decay_rate_old: 0.03
+  school_age_value_floor: 0.35
+  school_tier_decay_multiplier:
+    tier_1: 0.75
+    tier_2: 1.00
+    tier_3: 1.15
+
+  # [系统控制] 房龄舒适度惩罚（超过阈值后逐步扣分）
+  house_age_penalty_start_year: 25
+  house_age_penalty_rate: 0.008
+  house_age_penalty_cap: 0.25
+  # [系统控制] 挂牌时长加分（帮助买家识别“久挂可谈价”房源）
+  listing_age_stale_start_months: 2
+  listing_age_bonus_rate: 0.015
+  listing_age_bonus_cap: 0.15
+
+  # [系统控制] 资金闸门
+  leverage_cap: 0.60
+  liquidity_floor_months: 6
+
+# ====== 11. 战时模式/个贷压力测试 (Market Pulse) ======
+market_pulse:
+  # [系统控制] 开关（默认关闭，按需开启压力测试）
+  enabled: false
+
+  # [系统控制] 初始存量按揭注入（仅新建模拟首月）
+  seed_existing_mortgage_ratio: 0.55
+  seed_ltv_min: 0.35
+  seed_ltv_max: 0.78
+  seed_rate_base: 0.045
+  seed_rate_jitter: 0.008
+  seed_term_years: 30
+  seed_loan_age_min_months: 12
+  seed_loan_age_max_months: 180
+
+  # [系统控制] 逾期状态机阈值（以连续漏缴月数计算）
+  watch_missed_payments: 1
+  dpd30_missed_payments: 2
+  dpd60_missed_payments: 3
+  default_missed_payments: 4
+
+  # [系统控制] 违约后抵押物处置参数
+  forced_sale_discount_ratio: 0.78
+  forced_sale_min_ratio: 0.92

@@ -1,0 +1,115 @@
+{
+  "generated_at": "2026-04-10T00:00:00",
+  "source_results_root": "seeded_default",
+  "source_db_count_scanned": 0,
+  "source_entry_count_accepted": 4,
+  "entries": [
+    {
+      "occupation": "互联网工程师",
+      "background_story": "收入稳定，关注通勤效率与家庭空间平衡，倾向在预算内优先保证居住品质。",
+      "purchase_motive_primary": "starter_home",
+      "investment_style": "balanced",
+      "housing_stage": "starter_no_home",
+      "family_stage": "single_or_couple_no_children",
+      "education_path": "not_school_sensitive",
+      "financial_profile": "cashflow_sensitive",
+      "seller_profile": "patient_holder",
+      "income_tier": "middle"
+    },
+    {
+      "occupation": "中层管理者",
+      "background_story": "家庭进入改善阶段，重点考虑学区与面积升级，接受合理范围内议价。",
+      "purchase_motive_primary": "education_upgrade",
+      "investment_style": "balanced",
+      "housing_stage": "owner_upgrade",
+      "family_stage": "primary_school_before_transition",
+      "education_path": "public_school_district_priority",
+      "financial_profile": "balanced_finance",
+      "seller_profile": "owner_occupier_upgrade",
+      "income_tier": "high"
+    },
+    {
+      "occupation": "自由职业者",
+      "background_story": "收入波动但持有一定现金储备，优先确保月供安全边际。",
+      "purchase_motive_primary": "upgrade",
+      "investment_style": "conservative",
+      "housing_stage": "owner_upgrade",
+      "family_stage": "young_family",
+      "education_path": "not_school_sensitive",
+      "financial_profile": "cashflow_sensitive",
+      "seller_profile": "patient_holder",
+      "income_tier": "lower_middle"
+    },
+    {
+      "occupation": "企业主",
+      "background_story": "持有多套资产，关注组合再平衡与持仓流动性，在关键窗口会主动调仓。",
+      "purchase_motive_primary": "investment",
+      "investment_style": "aggressive",
+      "housing_stage": "multi_owner",
+      "family_stage": "grown_children",
+      "education_path": "global_optional",
+      "financial_profile": "asset_reallocation",
+      "seller_profile": "active_trader",
+      "income_tier": "ultra_high"
+    }
+  ],
+  "by_tier": {
+    "middle": [
+      {
+        "occupation": "互联网工程师",
+        "background_story": "收入稳定，关注通勤效率与家庭空间平衡，倾向在预算内优先保证居住品质。",
+        "purchase_motive_primary": "starter_home",
+        "investment_style": "balanced",
+        "housing_stage": "starter_no_home",
+        "family_stage": "single_or_couple_no_children",
+        "education_path": "not_school_sensitive",
+        "financial_profile": "cashflow_sensitive",
+        "seller_profile": "patient_holder",
+        "income_tier": "middle"
+      }
+    ],
+    "high": [
+      {
+        "occupation": "中层管理者",
+        "background_story": "家庭进入改善阶段，重点考虑学区与面积升级，接受合理范围内议价。",
+        "purchase_motive_primary": "education_upgrade",
+        "investment_style": "balanced",
+        "housing_stage": "owner_upgrade",
+        "family_stage": "primary_school_before_transition",
+        "education_path": "public_school_district_priority",
+        "financial_profile": "balanced_finance",
+        "seller_profile": "owner_occupier_upgrade",
+        "income_tier": "high"
+      }
+    ],
+    "lower_middle": [
+      {
+        "occupation": "自由职业者",
+        "background_story": "收入波动但持有一定现金储备，优先确保月供安全边际。",
+        "purchase_motive_primary": "upgrade",
+        "investment_style": "conservative",
+        "housing_stage": "owner_upgrade",
+        "family_stage": "young_family",
+        "education_path": "not_school_sensitive",
+        "financial_profile": "cashflow_sensitive",
+        "seller_profile": "patient_holder",
+        "income_tier": "lower_middle"
+      }
+    ],
+    "ultra_high": [
+      {
+        "occupation": "企业主",
+        "background_story": "持有多套资产，关注组合再平衡与持仓流动性，在关键窗口会主动调仓。",
+        "purchase_motive_primary": "investment",
+        "investment_style": "aggressive",
+        "housing_stage": "multi_owner",
+        "family_stage": "grown_children",
+        "education_path": "global_optional",
+        "financial_profile": "asset_reallocation",
+        "seller_profile": "active_trader",
+        "income_tier": "ultra_high"
+      }
+    ],
+    "low": []
+  }
+}

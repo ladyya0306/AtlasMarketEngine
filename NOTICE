@@ -1,0 +1,23 @@
+Real Estate Simulation
+Copyright 2026 Contributors
+
+This repository includes and adapts material derived from the CAMEL-AI OASIS
+project:
+https://github.com/camel-ai/oasis
+
+The upstream OASIS project is distributed under the Apache License 2.0.
+Portions of this repository retain upstream copyright and attribution notices
+where required.
+
+This repository has been substantially modified and extended into an
+independent real-estate market simulation system focused on property trading,
+agent finance, mortgage risk, and market experimentation.
+
+Project status statement:
+"This project was initially inspired by and evolved from CAMEL-AI's OASIS
+project, and has since been expanded into an independent real-estate
+simulation system."
+
+This NOTICE file is provided to satisfy Apache License 2.0 notice obligations
+for redistributed derivative material. It does not imply endorsement by
+CAMEL-AI or the OASIS maintainers.
