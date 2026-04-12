@@ -10,6 +10,49 @@ AtlasMarketEngine is a research-grade market simulation engine designed to repro
 
 It also supports directional shock testing through a human-friendly CLI with resumable month-to-month state.
 
+---
+
+## 中文简介
+
+AtlasMarketEngine 是一个面向公开交流的房地产市场推演研究版系统。
+
+它当前重点证明的，不是“自然激活已经完全研究透了”，而是另一件更硬的事：
+
+**在共享交易主链下，系统已经具备稳定构造三类市场状态的能力：**
+
+- 平衡市场
+- 买方市场
+- 卖方市场
+
+并且，它已经能够在外生变量注入后，给出方向合理、可解释的响应。
+
+### 这次公开版保留了什么
+
+- 可运行的核心代码
+- 真人友好的 Scholar CLI 入口
+- 公开版派生证据摘要
+- 首页展示图、一页卖点图、CLI 展示图
+
+### 这次公开版没有保留什么
+
+- 更完整的内部原始证据库
+- 更深的治理参数包
+- 更成熟的自然激活研究线材料
+- 商业化场景和行业适配层
+
+换句话说，这不是完整商业版，也不是最终产品版，而是：
+
+**一个可运行、可讲清楚、可建立可信度的 Research Release。**
+
+### 如果你只有 5 分钟
+
+建议按这个顺序看：
+
+1. [公开证据摘要](./evidence/market_validation_summary_public.md)
+2. [发布目录索引](./docs/发布目录索引.md)
+3. [Scholar CLI 复现实验说明](./docs/Scholar_CLI_复现实验说明_20260412.md)
+4. [CLI 主入口](./real_estate_demo_v2_1.py)
+
 ![Atlas onepager](./assets/atlas_onepager.svg)
 
 ## Why this repo exists
