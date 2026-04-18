@@ -10,6 +10,11 @@ AtlasMarketEngine is a public-facing research engine for housing-market simulati
 
 This repository focuses on that release goal. It is not the full internal commercial stack, and it is not a generic “AI real estate demo.” It is a runnable research release with a clear transaction chain, visible assumptions, and reproducible entrypoints.
 
+> Important sync note:
+> This public repository is **not yet fully aligned** with the latest private working branch.
+> In particular, the latest release-only startup path built around fixed supply snapshots, demand multipliers, and fully externalized “round” wording has not been fully merged here yet.
+> If you see legacy `month/months` wording in runtime output, interpret it as the public branch's compatibility vocabulary rather than a statement about real calendar months.
+
 ![Atlas onepager](./assets/atlas_onepager.svg)
 
 ---
@@ -31,6 +36,11 @@ AtlasMarketEngine 是一个住房市场推演引擎。
 一句话说，它是一个：
 
 **可运行、可解释、可干预、可复查的住房市场推演系统。**
+
+> 同步状态说明：
+> 这个公开仓当前**还没有完全追平**最新的内部工作分支。
+> 尤其是“固定供应盘 + 需求倍率 + 自动冲击”的最新发布入口，以及对外全面改成“回合”的展示链，当前公开仓还没有全部合并。
+> 所以如果你在公开仓运行时仍看到 `month/months` 或“月份”，应理解为旧公开口径下的兼容表达，不应直接当成现实自然月。
 
 ### 为什么要做这个项目
 
@@ -206,6 +216,26 @@ python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
 3. 上传 smoke 报告 artifact
 
 也就是说，别人不一定要先相信 README，可以先看自动化检查是不是绿的。
+
+### 当前公开仓和最新工作分支还差什么
+
+为了避免误解，这里明确写清楚：
+
+1. 公开仓当前已经具备：
+   - 可运行主链
+   - 公开证据摘要
+   - Scholar CLI 入口
+   - clone 后最小 smoke test
+   - GitHub Actions 自动自检
+2. 公开仓当前**还没有完整追平**的部分包括：
+   - 固定供应盘发布入口
+   - `0.10x - 2.00x` 的需求倍率发布链
+   - 梭子型 / 金字塔型公开切换入口
+   - 对外全链路“回合”口径
+
+这意味着：
+
+**AtlasMarketEngine 现在已经适合公开说明、公开 clone、自检和基础演示，但还不能被表述成“已经与最新内部发布分支完全同步”。**
 
 ### 推荐先读什么
 
@@ -423,6 +453,27 @@ On push or pull request, it will:
 3. upload the smoke report artifact
 
 So people do not need to trust the README blindly. They can inspect the automated check status.
+
+### What is still not fully synced to the latest working branch
+
+To avoid overclaiming, this public repo currently includes:
+
+1. the runnable public core
+2. the public evidence layer
+3. the Scholar CLI path
+4. a clone verification smoke test
+5. GitHub Actions smoke validation
+
+But it does **not yet fully expose** the newest release branch features such as:
+
+1. the fixed-supply startup flow
+2. the `0.10x - 2.00x` demand-multiplier release path
+3. public spindle/pyramid snapshot switching
+4. fully externalized “round” terminology across the entire user-visible chain
+
+So the right description today is:
+
+**AtlasMarketEngine is already suitable for public explanation, cloning, basic verification, and research demos, but it is not yet a one-to-one mirror of the latest private release branch.**
 
 ### What to read first
 
