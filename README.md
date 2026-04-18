@@ -4,7 +4,42 @@
 
 ---
 
+## First 3 Entry Points
+
+If this is your first time opening the repository, start here:
+
+1. Read the project overview in this page: `README.md`
+2. Run the smallest clone verification:
+   - `python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42`
+3. Open the public release map:
+   - `docs/发布目录索引.md`
+
+If you want the web interface immediately:
+
+- Read `START_WEBSITE.md`
+- Then run:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1 -Mock`
+
+---
+
 ## 中文说明
+
+### 第一次访问仓库，先看这 3 个入口
+
+如果你是第一次打开这个仓库，最先看这 3 个入口就够了：
+
+1. `README.md`
+   - 先知道这个项目是什么、为什么存在、已经能做什么
+2. `scripts/public_smoke_test.py`
+   - 先验证 clone 以后能不能跑起来
+3. `docs/发布目录索引.md`
+   - 再决定你要看通俗总结、发布说明、证据索引，还是操作手册
+
+如果你想直接看网页界面，再走这一条：
+
+- `START_WEBSITE.md`
+- 然后执行：
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1 -Mock`
 
 ### 这个项目是什么
 
@@ -208,6 +243,23 @@ flowchart TD
 ---
 
 ## English
+
+### First-time visitor: start with these 3 entry points
+
+If this is your first time opening the repo, these are the three most useful starting points:
+
+1. `README.md`
+   - understand what the project is, why it exists, and what it currently supports
+2. `scripts/public_smoke_test.py`
+   - verify that a fresh clone can actually run
+3. `docs/发布目录索引.md`
+   - choose whether you want the plain-language summary, release notes, evidence index, or operating guide
+
+If you want the web UI first, use:
+
+- `START_WEBSITE.md`
+- then run:
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1 -Mock`
 
 ### What this project is
 
