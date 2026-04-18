@@ -102,8 +102,7 @@ def _force_round_one_review(original_review_fn):
 def main() -> int:
     timestamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _ensure_dir(
-        Path("D:/GitProj/visual_real_estate/results/release_round_panel_followthrough_smoke")
-        / f"panel_followthrough_{timestamp}"
+        PROJECT_ROOT / "results" / "release_round_panel_followthrough_smoke" / f"panel_followthrough_{timestamp}"
     )
     db_path = run_dir / "simulation.db"
 

@@ -1,7 +1,7 @@
 {
-  "name": "visual_real_estate",
+  "name": "atlas-market-engine",
   "version": "1.0.0",
-  "description": "> 本项目最初参考/基于 CAMEL-AI 的 OASIS 项目演化而来，现已扩展为面向房地产市场的独立仿真与可视化系统。\r > 本仓库不是 CAMEL-AI 官方 OASIS 仓库，也不代表 OASIS 官方发布。\r > 当前状态：本目录作为后续主开发目录使用，目标是逐步实现 `V.md` 中定义的交互式可视化模拟产品。",
+  "description": "AtlasMarketEngine is a public housing market simulation engine with fixed supply snapshots, demand scaling, round-end interventions, CLI/Web entry points, and clone verification.",
   "main": "index.js",
   "directories": {
     "doc": "docs",

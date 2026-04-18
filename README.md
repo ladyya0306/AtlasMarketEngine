@@ -189,6 +189,22 @@ flowchart TD
 4. `/docs/卖方市场局部竞价证据_20260418.md`
 5. `/docs/发布操作手册_20260418.md`
 
+### 关于部分文档里的内部来源路径
+
+部分详细证据文档仍会保留原始内部取证路径，用来说明这些结论最初来自哪条内部样本。
+
+这些路径应理解为：
+
+- 来源追溯信息
+- 不是要求你在公开仓本地也一定存在同名目录
+
+公开仓真正可用的入口，应优先看：
+
+- `README.md`
+- `START_WEBSITE.md`
+- `docs/发布目录索引.md`
+- `scripts/public_smoke_test.py`
+
 ---
 
 ## English
@@ -307,6 +323,22 @@ This repository follows a **Derived Evidence Only** policy:
 3. `/docs/发布证据包索引_20260418.md`
 4. `/docs/卖方市场局部竞价证据_20260418.md`
 5. `/docs/发布操作手册_20260418.md`
+
+### About internal provenance paths in some evidence notes
+
+Some detailed evidence notes still preserve original internal source paths.
+
+Those paths should be interpreted as:
+
+- provenance references
+- not a requirement that the same internal directories exist in your public clone
+
+For a fresh public user, the practical entry points are:
+
+- `README.md`
+- `START_WEBSITE.md`
+- `docs/发布目录索引.md`
+- `scripts/public_smoke_test.py`
 
 ---
 

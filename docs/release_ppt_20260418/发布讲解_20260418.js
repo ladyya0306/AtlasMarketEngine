@@ -8,7 +8,7 @@ const {
 const pptx = new PptxGenJS();
 pptx.layout = "LAYOUT_WIDE";
 pptx.author = "OpenAI Codex";
-pptx.company = "visual_real_estate";
+pptx.company = "AtlasMarketEngine";
 pptx.subject = "中国住房市场推演发布说明";
 pptx.title = "中国住房市场推演发布讲解";
 pptx.lang = "zh-CN";

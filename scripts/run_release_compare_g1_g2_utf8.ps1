@@ -1,5 +1,5 @@
 param(
-    [string]$Workspace = "D:\GitProj\visual_real_estate",
+    [string]$Workspace = $(Split-Path -Parent $PSScriptRoot),
     [int]$Months = 6,
     [int]$Seed = 606,
     [switch]$Background

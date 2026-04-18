@@ -1,5 +1,5 @@
 param([string]$Root='results/night_plan/autopilot_loop_20260401_005021')
-Set-Location 'D:\GitProj\visual_real_estate'
+Set-Location (Split-Path -Parent $PSScriptRoot)
 $ErrorActionPreference='Stop'
 function Gate($MatrixDir,$OutJson){
 $py=@"

@@ -1,5 +1,5 @@
 param(
-    [string]$Workspace = "D:\GitProj\visual_real_estate",
+    [string]$Workspace = $(Split-Path -Parent $PSScriptRoot),
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )

@@ -47,7 +47,7 @@
   },
   "governance_snapshot": {
     "identity": {
-      "profile_pack_path": "D:\\GitProj\\visual_real_estate\\config\\line_a_profile_pack_v2_template.yaml",
+  "profile_pack_path": "config/line_a_profile_pack_v2_template.yaml",
       "experiment_mode": "abundant",
       "seed": 606,
       "group": "pyramid_minimum",

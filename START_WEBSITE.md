@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1
 
 ## 1. 标准启动方式
 
-在项目根目录 [`d:\GitProj\visual_real_estate`](/d:/GitProj/visual_real_estate) 打开 PowerShell，执行：
+在当前仓库根目录打开 PowerShell，执行：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1
@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\start_web_ui.ps1
 
 要求：
 
-- 根目录 [`.env`](/d:/GitProj/visual_real_estate/.env) 中已有可用的模型配置
+- 当前仓库根目录 `.env` 中已有可用的模型配置
 - 当前机器网络可访问对应模型服务
 - 这是默认启动方式，不需要额外参数
 

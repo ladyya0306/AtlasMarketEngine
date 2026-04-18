@@ -1,5 +1,5 @@
 param(
-  [string]$ProjectRoot = 'D:\GitProj\visual_real_estate'
+[string]$ProjectRoot = $(Split-Path -Parent $PSScriptRoot)
 )
 
 Set-Location $ProjectRoot

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-Set-Location "D:\GitProj\visual_real_estate"
+Set-Location (Split-Path -Parent $PSScriptRoot)
 
 $python = "C:\Users\wyl\anaconda3\envs\oasis\python.exe"
 $ts = Get-Date -Format "yyyyMMdd_HHmmss"

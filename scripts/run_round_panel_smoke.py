@@ -114,8 +114,7 @@ def _seed_round_review_facts(runner: SimulationRunner, round_no: int) -> None:
 def main() -> int:
     timestamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = _ensure_dir(
-        Path("D:/GitProj/visual_real_estate/results/release_round_panel_smoke")
-        / f"panel_smoke_{timestamp}"
+        PROJECT_ROOT / "results" / "release_round_panel_smoke" / f"panel_smoke_{timestamp}"
     )
     db_path = run_dir / "simulation.db"
 

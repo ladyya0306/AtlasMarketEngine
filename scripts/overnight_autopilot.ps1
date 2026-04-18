@@ -3,7 +3,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = 'D:\GitProj\visual_real_estate'
+$root = (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 $env:PYTHONPATH = $root
 
@@ -76,11 +76,12 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding 
 Log "Resume manifest saved: $manifestPath"
 
 $cardPath = Join-Path $root 'docs\外部事实对照卡_初版_20260325.md'
-$py = @'
+$rootForPy = ($root -replace '\\','\\')
+$py = @"
 import json
 from pathlib import Path
 
-root = Path(r"D:\GitProj\visual_real_estate")
+root = Path(r"$rootForPy")
 paths = [
     root / "results/night_plan/fix4_uplift_verify_20260325_192025/zone_chain_summary.json",
     root / "results/night_plan/fix4_stability_seed303_20260325_205803/zone_chain_summary.json",
@@ -145,7 +146,7 @@ lines.append('- 当前为初版对照卡，后续会加入更多外部数据源�
 out = root / 'docs/外部事实对照卡_初版_20260325.md'
 out.write_text('\n'.join(lines), encoding='utf-8')
 print(str(out))
-'@
+"@
 $cardStd = Join-Path $autoRoot 'fact_card_stdout.log'
 $cardErr = Join-Path $autoRoot 'fact_card_stderr.log'
 $py | python - 1> $cardStd 2> $cardErr
