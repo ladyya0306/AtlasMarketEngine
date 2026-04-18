@@ -1,0 +1,29 @@
+# ============================================
+# 研究场景配置：限购政策 (Policy Restrictions)
+# ============================================
+# 研究目标：评估行政调控对投资性需求的抑制效果
+# 继承自: baseline.yaml (隐式)
+
+# 购买限制规则
+transaction_rules:
+  max_properties_per_agent: 1    # 每人最多持有1套（刚需）
+  purchase_qualification:
+    require_local_hukou: true    # 需要本地户口
+    min_social_security_months: 60  # 需缴纳5年社保
+
+  exemptions:
+    first_time_buyer: true       # 首次购房不受限
+    upgrade_allowed: true        # 允许"卖一买一"置换
+
+# 决策因子调整
+decision_factors:
+  activation:
+    weights:
+      multi_property_holder: -1.0  # 多房者激活概率大幅降低（禁止买入）
+      high_wealth_no_property: 0.3  # 无房高净值者激活率进一步提升
+
+market:
+  zones:
+    A:
+      property_count:
+        quality_3: 40  # 假设豪宅供给因流动性锁死而增加

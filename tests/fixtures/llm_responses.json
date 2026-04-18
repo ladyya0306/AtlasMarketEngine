@@ -1,0 +1,26 @@
+{
+    "role_buyer": {
+        "role": "BUYER",
+        "reasoning": "Savings are high, need a home."
+    },
+    "role_seller": {
+        "role": "SELLER",
+        "reasoning": "Need cash, selling property."
+    },
+    "role_observer": {
+        "role": "OBSERVER",
+        "reasoning": "Market unchanged."
+    },
+    "batch_roles": [
+        {
+            "id": 1,
+            "role": "BUYER",
+            "reason": "High income"
+        },
+        {
+            "id": 2,
+            "role": "OBSERVER",
+            "reason": "Low cash"
+        }
+    ]
+}

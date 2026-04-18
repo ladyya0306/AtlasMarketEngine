@@ -1,1 +1,1 @@
-# Prompt templates for public AtlasMarketEngine releases.
+"""Prompt templates for AtlasMarketEngine."""

@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="page.title">可视化地产控制台</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <div class="app-shell">
+    <div id="month-banner" class="month-banner hidden"></div>
+    <aside class="panel control-panel">
+      <div class="control-topbar">
+        <div>
+          <div class="eyebrow" data-i18n="brand.eyebrow">Visual Real Estate</div>
+          <h1 data-i18n="sidebar.title">模拟控制台</h1>
+        </div>
+        <div class="control-topbar-actions">
+          <button id="demo-mode-toggle" type="button" class="ghost compact-btn" data-i18n="buttons.demo_mode">领导演示</button>
+          <button id="reset-sidebar-width" type="button" class="ghost compact-btn" title="重置控制台宽度">恢复宽度</button>
+          <div class="lang-switch" role="group" aria-label="language switch">
+          <button id="lang-zh" type="button" class="ghost lang-btn active">中文</button>
+          <button id="lang-en" type="button" class="ghost lang-btn">EN</button>
+          </div>
+        </div>
+      </div>
+      <p class="panel-copy" data-i18n="sidebar.copy">先打通控制和事件流，再逐步接入大屏动效。</p>
+
+      <form id="start-form" class="control-form">
+        <div class="preset-hint">
+          <div class="preset-hint-title" data-i18n="startup.snapshot_title">启动向导</div>
+          <div class="preset-hint-copy" data-i18n="startup.snapshot_copy">启动参数统一在这里配置，和 CLI 启动流程保持同类信息结构。</div>
+        </div>
+        <div class="startup-grid startup-grid-2 startup-mode-grid">
+          <label>
+            <span data-i18n="startup.mode">启动模式</span>
+            <select id="start-mode">
+              <option value="new" data-i18n="startup.mode_new">新开模拟（清空旧运行）</option>
+              <option value="night_run" data-i18n="startup.mode_night_run">夜跑模拟（自动整轮）</option>
+              <option value="resume" data-i18n="startup.mode_resume">恢复模拟（从 DB 继续）</option>
+              <option value="forensic" data-i18n="startup.mode_forensic">运行逻辑体检</option>
+            </select>
+          </label>
+          <label id="resume-run-wrap" class="hidden">
+            <span data-i18n="startup.resume_run">恢复运行</span>
+            <select id="resume-run-select"></select>
+          </label>
+          <label id="night-plan-wrap" class="hidden">
+            <span data-i18n="startup.night_plan">夜跑计划文件</span>
+            <input id="night-plan-path" type="text" value="config/night_run_example.yaml">
+          </label>
+        </div>
+        <div id="start-mode-panel" class="preset-hint mode-panel">
+          <div id="start-mode-panel-title" class="preset-hint-title" data-i18n="startup.mode_panel_new_title">新开模拟</div>
+          <div id="start-mode-panel-copy" class="preset-hint-copy" data-i18n="startup.mode_panel_new_copy">配置启动参数后创建一轮新的模拟运行。这里会显示完整启动向导。</div>
+        </div>
+        <section id="night-plan-editor" class="startup-step hidden">
+          <div class="startup-step-head">
+            <div class="startup-step-head-copy">
+              <strong data-i18n="startup.night_editor_title">夜跑预设干预</strong>
+              <span class="startup-step-copy" data-i18n="startup.night_editor_copy">按回合预设自动干预。网页填写的条目会直接写入本轮夜跑计划。</span>
+            </div>
+            <div class="night-plan-editor-head-actions">
+              <button id="night-plan-toggle" type="button" class="ghost compact-btn" data-i18n="startup.expand_night_plan">展开夜跑编辑器</button>
+            </div>
+          </div>
+          <div id="night-plan-editor-body" class="night-plan-editor-body hidden">
+            <div id="night-plan-summary" class="preset-hint compact"></div>
+            <div class="startup-grid startup-grid-2 night-plan-quick-add">
+              <label>
+                <span data-i18n="startup.night_add_month">新增回合</span>
+                <input id="night-plan-new-month" type="number" min="1" step="1" value="1">
+              </label>
+              <label>
+                <span data-i18n="startup.night_add_action">新增动作</span>
+                <select id="night-plan-new-action">
+                  <option value="population_add" data-i18n="startup.add_population_plan">新增人口注入</option>
+                  <option value="developer_supply" data-i18n="startup.add_supply_plan">新增开发商投房</option>
+                  <option value="supply_cut">新增减供下架</option>
+                  <option value="income_shock" data-i18n="startup.add_income_plan">新增收入冲击</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row night-plan-actions">
+              <button id="night-plan-add-at-month" type="button" class="ghost" data-i18n="startup.add_plan_at_month">在该回合新增动作</button>
+              <button id="night-plan-reset" type="button" class="ghost" data-i18n="startup.reset_night_plan">载入示例计划</button>
+            </div>
+            <div id="night-plan-list" class="night-plan-list"></div>
+            <div class="button-row night-plan-actions">
+              <button id="night-plan-add-population" type="button" class="ghost" data-i18n="startup.add_population_plan">新增人口注入</button>
+              <button id="night-plan-add-developer" type="button" class="ghost" data-i18n="startup.add_supply_plan">新增开发商投房</button>
+            </div>
+            <div class="button-row night-plan-actions">
+              <button id="night-plan-add-supply-cut" type="button" class="ghost">新增减供下架</button>
+              <button id="night-plan-add-income" type="button" class="ghost" data-i18n="startup.add_income_plan">新增收入冲击</button>
+              <button id="night-plan-export" type="button" class="ghost" data-i18n="startup.export_night_plan">导出 JSON</button>
+            </div>
+            <div class="button-row night-plan-actions">
+              <button id="night-plan-import" type="button" class="ghost" data-i18n="startup.import_night_plan">导入 JSON</button>
+            </div>
+          </div>
+          <input id="night-plan-import-file" type="file" accept="application/json,.json" class="hidden">
+        </section>
+        <div id="resume-run-summary" class="preset-hint hidden"></div>
+        <section class="startup-step">
+          <div class="startup-step-head">
+            <strong>步骤 1/3 · 固定供应盘与需求倍率</strong>
+            <span class="startup-step-copy">先锁定梭子型固定供应盘，再设置需求倍率。系统会自动保证买家画像全保留、供应桶全覆盖。</span>
+          </div>
+          <div class="startup-grid startup-grid-2">
+            <label>
+              <span>固定供应盘</span>
+              <select id="startup-supply-snapshot"></select>
+            </label>
+            <label>
+              <span>市场目标</span>
+              <select id="startup-market-goal">
+                <option value="balanced">balanced / 平衡市场</option>
+                <option value="buyer_market">buyer_market / 买方市场</option>
+                <option value="seller_market">seller_market / 卖方市场</option>
+              </select>
+            </label>
+            <label>
+              <span>需求侧倍率（相对供应套数）</span>
+              <input id="startup-demand-multiplier" data-startup-control type="number" min="0.10" max="2.00" step="0.01" value="1.00">
+            </label>
+            <div id="startup-demand-coverage" class="preset-hint compact"></div>
+          </div>
+        </section>
+        <section class="startup-step hidden" data-legacy-startup="true">
+          <div class="startup-step-head">
+            <strong data-i18n="startup.step1_title">步骤 1/4 · Agent 数量与收入档次</strong>
+            <span class="startup-step-copy" data-i18n="startup.step1_copy">先确定总人数，再分配 5 档收入与初始持房范围。</span>
+          </div>
+          <div class="startup-grid startup-grid-2">
+            <label>
+              <span data-i18n="startup.agents">Agent 总数</span>
+              <input id="agent-count" data-startup-control type="number" min="1" value="50">
+            </label>
+            <div id="startup-tier-summary" class="preset-hint compact"></div>
+          </div>
+          <div class="startup-tier-list">
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.tier_ultra_high">超高收入档</strong><span>150k - 300k / 月</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.count">人数</span><input id="tier-ultra-high-count" data-startup-control type="number" min="0" value="10"></label>
+                <label><span data-i18n="startup.income_min">收入下限</span><input id="tier-ultra-high-income-min" data-startup-control type="number" min="0" value="150000"></label>
+                <label><span data-i18n="startup.income_max">收入上限</span><input id="tier-ultra-high-income-max" data-startup-control type="number" min="0" value="300000"></label>
+                <label><span data-i18n="startup.property_min">拥房最小值</span><input id="tier-ultra-high-property-min" data-startup-control type="number" min="0" value="2"></label>
+                <label><span data-i18n="startup.property_max">拥房最大值</span><input id="tier-ultra-high-property-max" data-startup-control type="number" min="0" value="5"></label>
+              </div>
+            </article>
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.tier_high">高收入档</strong><span>80k - 150k / 月</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.count">人数</span><input id="tier-high-count" data-startup-control type="number" min="0" value="12"></label>
+                <label><span data-i18n="startup.income_min">收入下限</span><input id="tier-high-income-min" data-startup-control type="number" min="0" value="80000"></label>
+                <label><span data-i18n="startup.income_max">收入上限</span><input id="tier-high-income-max" data-startup-control type="number" min="0" value="150000"></label>
+                <label><span data-i18n="startup.property_min">拥房最小值</span><input id="tier-high-property-min" data-startup-control type="number" min="0" value="1"></label>
+                <label><span data-i18n="startup.property_max">拥房最大值</span><input id="tier-high-property-max" data-startup-control type="number" min="0" value="3"></label>
+              </div>
+            </article>
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.tier_middle">中等收入档</strong><span>40k - 80k / 月</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.count">人数</span><input id="tier-middle-count" data-startup-control type="number" min="0" value="14"></label>
+                <label><span data-i18n="startup.income_min">收入下限</span><input id="tier-middle-income-min" data-startup-control type="number" min="0" value="40000"></label>
+                <label><span data-i18n="startup.income_max">收入上限</span><input id="tier-middle-income-max" data-startup-control type="number" min="0" value="80000"></label>
+                <label><span data-i18n="startup.property_min">拥房最小值</span><input id="tier-middle-property-min" data-startup-control type="number" min="0" value="0"></label>
+                <label><span data-i18n="startup.property_max">拥房最大值</span><input id="tier-middle-property-max" data-startup-control type="number" min="0" value="1"></label>
+              </div>
+            </article>
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.tier_lower_middle">中低收入档</strong><span>20k - 40k / 月</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.count">人数</span><input id="tier-lower-middle-count" data-startup-control type="number" min="0" value="8"></label>
+                <label><span data-i18n="startup.income_min">收入下限</span><input id="tier-lower-middle-income-min" data-startup-control type="number" min="0" value="20000"></label>
+                <label><span data-i18n="startup.income_max">收入上限</span><input id="tier-lower-middle-income-max" data-startup-control type="number" min="0" value="40000"></label>
+                <label><span data-i18n="startup.property_min">拥房最小值</span><input id="tier-lower-middle-property-min" data-startup-control type="number" min="0" value="0"></label>
+                <label><span data-i18n="startup.property_max">拥房最大值</span><input id="tier-lower-middle-property-max" data-startup-control type="number" min="0" value="1"></label>
+              </div>
+            </article>
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.tier_low">低收入档</strong><span>8k - 20k / 月</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.count_auto">人数（自动补齐）</span><input id="tier-low-count" data-startup-control type="number" min="0" value="6" readonly></label>
+                <label><span data-i18n="startup.income_min">收入下限</span><input id="tier-low-income-min" data-startup-control type="number" min="0" value="8000"></label>
+                <label><span data-i18n="startup.income_max">收入上限</span><input id="tier-low-income-max" data-startup-control type="number" min="0" value="20000"></label>
+                <label><span data-i18n="startup.property_min">拥房最小值</span><input id="tier-low-property-min" data-startup-control type="number" min="0" value="0"></label>
+                <label><span data-i18n="startup.property_max">拥房最大值</span><input id="tier-low-property-max" data-startup-control type="number" min="0" value="0"></label>
+              </div>
+            </article>
+          </div>
+        </section>
+        <section class="startup-step hidden" data-legacy-startup="true">
+          <div class="startup-step-head">
+            <strong data-i18n="startup.step2_title">步骤 2/4 · 房产总量</strong>
+            <span class="startup-step-copy" data-i18n="startup.step2_copy">根据各收入档持房范围，估算房源总量与库存余量。</span>
+          </div>
+          <div class="startup-grid startup-grid-2">
+            <label>
+              <span data-i18n="startup.property_total">房产总数</span>
+              <input id="property-total-count" data-startup-control type="number" min="1" value="48">
+            </label>
+            <div id="property-total-helper" class="preset-hint compact"></div>
+          </div>
+        </section>
+        <section class="startup-step hidden" data-legacy-startup="true">
+          <div class="startup-step-head">
+            <strong data-i18n="startup.step25_title">步骤 2.5/4 · 区域房价与租金</strong>
+            <span class="startup-step-copy" data-i18n="startup.step25_copy">设置 A/B 区单价区间、租金水平和无房参与现金门槛。</span>
+          </div>
+          <div class="startup-zone-grid">
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.zone_a">A 区 · 核心区</strong><span data-i18n="startup.zone_price_hint">单价决定房产初始估值</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.price_min">单价下限 / ㎡</span><input id="zone-a-price-min" data-startup-control type="number" min="1" value="32000"></label>
+                <label><span data-i18n="startup.price_max">单价上限 / ㎡</span><input id="zone-a-price-max" data-startup-control type="number" min="1" value="40000"></label>
+                <label><span data-i18n="startup.rent_per_sqm">租金 / ㎡ / 月</span><input id="zone-a-rent" data-startup-control type="number" min="1" value="100"></label>
+              </div>
+            </article>
+            <article class="startup-tier-card">
+              <div class="startup-tier-head"><strong data-i18n="startup.zone_b">B 区 · 非核心区</strong><span data-i18n="startup.zone_price_hint">单价决定房产初始估值</span></div>
+              <div class="startup-tier-grid">
+                <label><span data-i18n="startup.price_min">单价下限 / ㎡</span><input id="zone-b-price-min" data-startup-control type="number" min="1" value="10000"></label>
+                <label><span data-i18n="startup.price_max">单价上限 / ㎡</span><input id="zone-b-price-max" data-startup-control type="number" min="1" value="20000"></label>
+                <label><span data-i18n="startup.rent_per_sqm">租金 / ㎡ / 月</span><input id="zone-b-rent" data-startup-control type="number" min="1" value="60"></label>
+              </div>
+            </article>
+          </div>
+          <div class="startup-grid startup-grid-2">
+            <label>
+              <span data-i18n="startup.min_cash_threshold">无房参与现金门槛（万元）</span>
+              <input id="min-cash-threshold" data-startup-control type="number" min="0" step="1" value="50">
+            </label>
+          </div>
+        </section>
+        <section class="startup-step">
+          <div class="startup-step-head">
+            <strong data-i18n="startup.step4_title">步骤 4/4 · 运行范围与高级开关</strong>
+            <span class="startup-step-copy" data-i18n="startup.step4_copy">设置回合数、种子、基准年份和少量高价值启动项。</span>
+          </div>
+          <div class="startup-grid startup-grid-2">
+            <label>
+                <span data-i18n="startup.months">模拟回合（虚拟周期）</span>
+              <input id="months" data-startup-control type="number" min="1" value="1">
+            </label>
+            <label>
+              <span data-i18n="startup.seed">随机种子</span>
+              <input id="seed" data-startup-control type="number" value="42">
+            </label>
+            <label>
+              <span data-i18n="startup.base_year">模拟基准年份</span>
+              <input id="base-year" data-startup-control type="number" min="1900" max="2100" value="2025">
+            </label>
+            <label>
+              <span data-i18n="startup.income_adjustment">收入调整倍率</span>
+              <input id="income-adjustment-rate" data-startup-control type="number" min="0.10" max="5.00" step="0.01" value="1.00">
+            </label>
+            <label>
+              <span data-i18n="startup.down_payment_ratio">首付比例</span>
+              <input id="startup-down-payment-ratio" data-startup-control type="number" min="0.05" max="0.95" step="0.01" value="0.30">
+            </label>
+            <label>
+              <span data-i18n="startup.max_dti_ratio">DTI 上限</span>
+              <input id="startup-max-dti-ratio" data-startup-control type="number" min="0.10" max="0.95" step="0.01" value="0.50">
+            </label>
+            <label>
+              <span data-i18n="startup.annual_interest_rate">年利率</span>
+              <input id="startup-annual-interest-rate" data-startup-control type="number" min="0.001" max="0.500" step="0.001" value="0.035">
+            </label>
+            <label class="checkbox-row">
+              <span data-i18n="startup.enable_panel">启用回合末人工干预面板</span>
+              <input id="startup-enable-panel" data-startup-control type="checkbox">
+            </label>
+            <label class="checkbox-row">
+              <span data-i18n="startup.market_pulse">启用 Market Pulse</span>
+              <input id="startup-market-pulse-enabled" data-startup-control type="checkbox">
+            </label>
+            <label>
+              <span data-i18n="startup.market_pulse_seed_ratio">存量按揭注入比例</span>
+              <input id="startup-market-pulse-seed-ratio" data-startup-control type="number" min="0" max="1" step="0.01" value="0.55">
+            </label>
+            <label>
+              <span data-i18n="startup.bid_floor_ratio">有效出价下限系数</span>
+              <input id="startup-bid-floor-ratio" data-startup-control type="number" min="0.50" max="1.20" step="0.01" value="0.98">
+            </label>
+            <label>
+              <span data-i18n="startup.precheck_buffer">下单前现金缓冲（月）</span>
+              <input id="startup-precheck-buffer" data-startup-control type="number" min="0" max="36" step="1" value="3">
+            </label>
+            <label class="checkbox-row">
+              <span data-i18n="startup.precheck_tax_fee">预检计入税费杂费</span>
+              <input id="startup-precheck-tax-fee" data-startup-control type="checkbox" checked>
+            </label>
+          </div>
+        </section>
+        <div id="startup-overview" class="preset-hint"></div>
+        <div id="startup-confirm" class="preset-confirm hidden">
+          <div id="startup-confirm-copy" class="preset-confirm-copy"></div>
+          <div class="button-row">
+            <button id="startup-confirm-apply" type="button" class="primary" data-i18n="buttons.confirm_start">确认启动</button>
+            <button id="startup-confirm-cancel" type="button" class="ghost" data-i18n="buttons.cancel">取消</button>
+          </div>
+        </div>
+        <div id="forensic-summary" class="preset-hint hidden"></div>
+        <div class="button-row">
+          <button id="start-submit-btn" type="submit" class="primary" data-i18n="buttons.start">启动模拟</button>
+              <button type="button" id="step-btn" data-i18n="buttons.step_month">推进一个回合</button>
+        </div>
+      </form>
+
+      <div class="status-card">
+        <div class="status-head">
+          <span data-i18n="runtime.title">运行态</span>
+          <strong id="status-badge">idle</strong>
+        </div>
+        <dl class="status-grid">
+              <div><dt data-i18n="runtime.month">当前回合</dt><dd id="current-month">0</dd></div>
+              <div><dt data-i18n="runtime.total">总回合数</dt><dd id="total-months">0</dd></div>
+              <div><dt data-i18n="runtime.remaining">剩余回合</dt><dd id="remaining-months">0</dd></div>
+          <div><dt data-i18n="runtime.run_dir">运行目录</dt><dd id="run-dir">-</dd></div>
+        </dl>
+      </div>
+
+      <section id="runtime-controls-card" class="status-card">
+        <div class="status-head">
+          <span data-i18n="controls.runtime_title">运行参数</span>
+          <strong id="controls-badge">idle</strong>
+        </div>
+        <div id="controls-summary" class="preset-hint" data-i18n="controls.waiting">等待活动参数。</div>
+      </section>
+
+      <section id="config-catalog-card" class="status-card">
+        <div class="status-head">
+          <span data-i18n="schema.catalog_title">配置目录</span>
+          <strong id="config-schema-count">0</strong>
+        </div>
+        <div id="config-schema-summary" class="preset-hint" data-i18n="schema.loading">正在加载配置 schema。</div>
+        <div class="config-schema-toolbar">
+          <label>
+            <span data-i18n="schema.search">搜索</span>
+            <input id="config-schema-search" type="search" data-i18n-placeholder="schema.search_placeholder" placeholder="标签 / key / 描述">
+          </label>
+          <label>
+            <span data-i18n="schema.phase">阶段</span>
+            <select id="config-schema-phase-filter">
+              <option value="all" data-i18n="common.all">全部</option>
+              <option value="startup_only" data-i18n="schema.phase_startup_only">仅启动前</option>
+              <option value="between_steps" data-i18n="schema.phase_between_steps">月间可调</option>
+              <option value="readonly" data-i18n="schema.phase_readonly">只读</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="schema.group">分组</span>
+            <select id="config-schema-group-filter">
+              <option value="all" data-i18n="schema.all_groups">全部分组</option>
+            </select>
+          </label>
+          <div class="config-schema-toolbar-actions">
+            <span data-i18n="schema.filters">筛选</span>
+            <label class="checkbox-row compact">
+              <span data-i18n="schema.only_editable">只看可编辑</span>
+              <input id="config-schema-only-editable" type="checkbox" checked>
+            </label>
+            <button id="config-schema-reset-filters" type="button" class="ghost" data-i18n="schema.reset_filters">重置筛选</button>
+          </div>
+        </div>
+        <form id="config-schema-form" class="control-form config-schema-form">
+          <div class="config-schema-edit-head">
+            <span data-i18n="schema.controls_title">参数控件</span>
+            <strong data-i18n="schema.phase_between_steps">月间可调</strong>
+          </div>
+          <div id="config-schema-startup-list" class="preset-hint compact"></div>
+          <div id="config-schema-edit-list" class="config-schema-edit-list"></div>
+          <details class="config-schema-readonly-panel">
+            <summary class="config-schema-readonly-summary">基线参考（只读，默认折叠）</summary>
+            <div id="config-schema-readonly-list" class="config-schema-edit-list"></div>
+          </details>
+          <button type="submit" class="ghost" data-i18n="buttons.apply_schema" title="Apply Schema Controls">应用 schema 参数</button>
+        </form>
+        <div id="config-schema-list" class="config-schema-list"></div>
+      </section>
+
+      <form id="preset-form" class="status-card">
+        <div class="status-head">
+          <span data-i18n="preset.title">实验场景</span>
+          <strong data-i18n="preset.one_click">一键应用</strong>
+        </div>
+        <div class="control-form">
+          <label>
+            <span data-i18n="preset.label">场景</span>
+            <select id="scenario-preset"></select>
+          </label>
+          <div id="scenario-preset-hint" class="preset-hint" data-i18n="preset.select_hint">选择一个场景以预览其自带的谈判 quote 策略。</div>
+          <div id="scenario-preset-confirm" class="preset-confirm hidden">
+            <div id="scenario-preset-confirm-copy" class="preset-confirm-copy"></div>
+            <div class="button-row">
+              <button id="scenario-preset-confirm-apply" type="button" class="primary" data-i18n="buttons.confirm_apply">确认应用</button>
+              <button id="scenario-preset-confirm-cancel" type="button" class="ghost" data-i18n="buttons.cancel">取消</button>
+            </div>
+          </div>
+          <div class="preset-history-head">
+            <span data-i18n="preset.track">场景轨迹</span>
+            <strong id="scenario-preset-history-count">0</strong>
+          </div>
+          <div id="scenario-preset-history" class="preset-history-list"></div>
+          <div id="scenario-preset-impact" class="preset-impact-card" data-i18n="preset.impact_hint">点击场景轨迹或回合归档卡，查看该场景对后续回合的影响。</div>
+          <button type="submit" class="ghost" data-i18n="buttons.apply_preset">应用场景</button>
+        </div>
+      </form>
+
+      <form id="population-form" class="status-card">
+        <div class="status-head">
+          <span data-i18n="population.title">人口干预</span>
+          <strong data-i18n="common.staged">阶段性</strong>
+        </div>
+        <div class="control-form">
+          <label>
+            <span data-i18n="population.template">人口模板</span>
+            <select id="population-template">
+              <option value="" data-i18n="common.custom">自定义</option>
+              <option value="young_first_home" data-i18n="population.template_young">青年首套流入</option>
+              <option value="middle_upgrade" data-i18n="population.template_upgrade">中产改善流入</option>
+              <option value="capital_investor" data-i18n="population.template_investor">高净值投资流入</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="population.count">新增人数</span>
+            <input id="population-count" type="number" min="1" max="200" value="10">
+          </label>
+          <label>
+            <span data-i18n="population.tier">收入层级</span>
+            <select id="population-tier">
+              <option value="middle">中等</option>
+              <option value="low">低</option>
+              <option value="lower_middle">中低</option>
+              <option value="upper_middle">中高</option>
+              <option value="high">高</option>
+              <option value="ultra_high">超高</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="population.multiplier">新增人口收入倍率</span>
+            <input id="population-income-multiplier" type="number" min="0.10" max="5.00" step="0.05" value="1.00">
+          </label>
+          <label>
+            <span data-i18n="population.multiplier_min">收入倍率下限</span>
+            <input id="population-income-multiplier-min" type="number" min="0.10" max="5.00" step="0.05" data-i18n-placeholder="population.multiplier_min_placeholder" placeholder="可选范围下限">
+          </label>
+          <label>
+            <span data-i18n="population.multiplier_max">收入倍率上限</span>
+            <input id="population-income-multiplier-max" type="number" min="0.10" max="5.00" step="0.05" data-i18n-placeholder="population.multiplier_max_placeholder" placeholder="可选范围上限">
+          </label>
+          <button type="submit" class="ghost" data-i18n="buttons.inject_population">注入人口</button>
+        </div>
+      </form>
+
+      <form id="income-form" class="status-card">
+        <div class="status-head">
+          <span data-i18n="income.title">收入冲击</span>
+          <strong data-i18n="common.staged">阶段性</strong>
+        </div>
+        <div class="control-form">
+          <label>
+            <span data-i18n="income.change">收入变动</span>
+            <input id="income-pct-change" type="number" min="-0.90" max="2.00" step="0.05" value="0.10">
+          </label>
+          <label>
+            <span data-i18n="income.target_tier">目标层级</span>
+            <select id="income-target-tier">
+              <option value="all">全部</option>
+              <option value="low">低</option>
+              <option value="lower_middle">中低</option>
+              <option value="middle">中等</option>
+              <option value="upper_middle">中高</option>
+              <option value="high">高</option>
+              <option value="ultra_high">超高</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="income.tier_change_1">分层变动 1</span>
+            <input id="income-tier-change-1" type="text" placeholder="low:-0.10">
+          </label>
+          <label>
+            <span data-i18n="income.tier_change_2">分层变动 2</span>
+            <input id="income-tier-change-2" type="text" placeholder="middle:0.05">
+          </label>
+          <label>
+            <span data-i18n="income.tier_change_3">分层变动 3</span>
+            <input id="income-tier-change-3" type="text" placeholder="high:0.12">
+          </label>
+          <button type="submit" class="ghost" data-i18n="buttons.apply_income">应用收入冲击</button>
+        </div>
+      </form>
+
+      <form id="developer-form" class="status-card">
+        <div class="status-head">
+          <span data-i18n="developer.title">开发商供给</span>
+          <strong data-i18n="common.staged">阶段性</strong>
+        </div>
+        <div class="control-form">
+          <label>
+            <span data-i18n="developer.template">供给模板</span>
+            <select id="developer-template">
+              <option value="" data-i18n="common.custom">自定义</option>
+              <option value="a_district_premium" data-i18n="developer.template_a">A 区高价学区盘</option>
+              <option value="b_entry_level" data-i18n="developer.template_b">B 区刚需盘</option>
+              <option value="mixed_balanced" data-i18n="developer.template_mixed">混合平衡包</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="developer.zone">区域</span>
+            <select id="developer-zone">
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="developer.count">投放套数</span>
+            <input id="developer-count" type="number" min="1" max="100" value="5">
+          </label>
+          <label>
+            <span data-i18n="developer.price_per_sqm">单价 / 平米</span>
+            <input id="developer-price-per-sqm" type="number" min="1000" step="500" data-i18n-placeholder="developer.price_placeholder" placeholder="按区域默认">
+          </label>
+          <label>
+            <span data-i18n="developer.size">面积</span>
+            <input id="developer-size" type="number" min="20" step="1" data-i18n-placeholder="developer.size_placeholder" placeholder="默认 80-140">
+          </label>
+          <label>
+            <span data-i18n="developer.school_units">学区房套数</span>
+            <input id="developer-school-units" type="number" min="0" step="1" data-i18n-placeholder="developer.school_placeholder" placeholder="按默认比例">
+          </label>
+          <label>
+            <span data-i18n="developer.build_year">建成年份</span>
+            <input id="developer-build-year" type="number" min="1900" max="2100" step="1" data-i18n-placeholder="developer.build_year_placeholder" placeholder="默认基准年份">
+          </label>
+          <button type="submit" class="ghost" data-i18n="buttons.inject_supply">注入供给</button>
+        </div>
+      </form>
+    </aside>
+    <div id="sidebar-resize-handle" class="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="调整控制台宽度"></div>
+
+    <main class="main-panel">
+        <section class="panel summary-panel">
+          <div class="section-head">
+          <h2 data-i18n="summary.title">回合摘要</h2>
+            <span id="socket-indicator" class="socket-indicator" data-i18n="socket.connecting">连接中</span>
+          </div>
+          <div class="summary-layout">
+            <div id="month-summary" class="summary-empty" data-i18n="summary.waiting">等待模拟数据。</div>
+            <article id="bulletin-panel" class="bulletin-panel">
+              <div class="bulletin-head">
+                <span class="bulletin-kicker" data-i18n="bulletin.title">市场公报</span>
+                <span id="bulletin-month" class="lane-count gold-count">M -</span>
+              </div>
+              <div id="bulletin-body" class="bulletin-copy" data-i18n="bulletin.waiting">等待公报数据。</div>
+            </article>
+        </div>
+      </section>
+
+      <section id="review-panel" class="panel review-panel hidden">
+        <div class="section-head">
+          <h2 data-i18n="review.title">最终复盘</h2>
+          <div class="inline-actions">
+            <span id="review-status-chip" class="lane-count gold-count" data-i18n="review.pending">等待中</span>
+            <button id="open-report-view" type="button" class="ghost" data-i18n="buttons.open_report">打开报告</button>
+            <button id="download-report-json" type="button" class="ghost" data-i18n="buttons.download_json">下载 JSON</button>
+            <button id="open-parameter-report-view" type="button" class="ghost" data-i18n="buttons.open_parameter_report">参数说明表</button>
+            <button id="download-parameter-report-json" type="button" class="ghost" data-i18n="buttons.download_parameter_json">参数 JSON</button>
+            <button id="open-db-observer" type="button" class="ghost" data-i18n="buttons.open_db_observer">数据库观测</button>
+          </div>
+        </div>
+        <div class="review-grid">
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.snapshot">运行快照</div>
+            <div id="review-snapshot" class="review-copy" data-i18n="review.not_finished">本轮尚未结束。</div>
+          </article>
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.recent_outcomes">最近结果</div>
+            <div id="review-outcomes" class="review-outcomes"></div>
+          </article>
+        </div>
+        <div class="review-grid review-grid-secondary">
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.top_agents">关键 Agent</div>
+            <div id="review-top-agents" class="review-ranking"></div>
+          </article>
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.key_properties">关键房产</div>
+            <div id="review-key-properties" class="review-ranking"></div>
+          </article>
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.failure_reasons">失败原因</div>
+            <div id="review-failure-reasons" class="review-ranking"></div>
+          </article>
+        </div>
+        <div class="review-grid review-grid-secondary">
+          <article class="review-card">
+            <div class="column-title" data-i18n="review.preset_timeline">场景时间线</div>
+            <div id="review-preset-timeline" class="review-ranking"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="stage-grid">
+        <section class="panel stage-panel screen-stage-panel">
+          <div class="section-head">
+            <h2 data-i18n="stage.screen">大屏舞台</h2>
+            <div class="inline-actions">
+              <span id="screen-stage-mode" class="lane-count gold-count">live</span>
+              <button id="screen-stage-fullscreen" type="button" class="ghost" data-i18n="buttons.fullscreen">全屏</button>
+              <button id="screen-stage-toggle" type="button" class="ghost" data-i18n="buttons.pause_motion">暂停动效</button>
+            </div>
+          </div>
+          <div class="screen-stage-copy" data-i18n="stage.screen_copy">Canvas 层镜像当前事件流，但不替代 DOM 控制台。</div>
+          <div id="screen-stage-shell" class="screen-stage-shell">
+            <canvas id="screen-canvas" width="1280" height="720" aria-label="screen stage canvas"></canvas>
+          </div>
+          <div id="screen-stage-hud" class="screen-stage-hud stage-strip">
+            <div class="screen-stage-kicker" data-i18n="stage.live_focus">实时焦点</div>
+            <div id="screen-stage-summary" class="screen-stage-summary" data-i18n="stage.waiting">等待舞台事件。</div>
+          </div>
+          <div class="screen-stage-legend stage-strip">
+            <div class="screen-stage-kicker" data-i18n="stage.legend_title">舞台图例</div>
+            <div class="screen-stage-legend-items">
+              <span class="stage-legend-item"><i class="stage-legend-swatch observer"></i><span data-i18n="stage.legend_observer">观察者 Agent</span></span>
+              <span class="stage-legend-item"><i class="stage-legend-swatch active"></i><span data-i18n="stage.legend_active">活跃参与者</span></span>
+              <span class="stage-legend-item"><i class="stage-legend-swatch listed"></i><span data-i18n="stage.legend_listed">挂牌房产</span></span>
+              <span class="stage-legend-item"><i class="stage-legend-swatch negotiating"></i><span data-i18n="stage.legend_negotiating">谈判中</span></span>
+              <span class="stage-legend-item"><i class="stage-legend-swatch success"></i><span data-i18n="stage.legend_success">已成交</span></span>
+              <span class="stage-legend-item"><i class="stage-legend-swatch failure"></i><span data-i18n="stage.legend_failure">失败 / 冷却</span></span>
+            </div>
+            <div class="screen-stage-legend-note" data-i18n="stage.legend_note">位置从左到右对应：生成、激活、挂牌、谈判、成功、失败。</div>
+          </div>
+          <div id="screen-stage-progress" class="screen-stage-progress stage-strip">
+            <div class="screen-stage-progress-head">
+              <span class="screen-stage-kicker" data-i18n="stage.progress_feed">运行进度</span>
+              <div id="screen-stage-demo-hint" class="screen-stage-demo-hint" aria-live="polite">
+                <span data-i18n="hud.fullscreen_hint">F 全屏</span>
+                <span data-i18n="hud.exit_hint">Esc 退出</span>
+                <span data-i18n="hud.pause_hint">Space 暂停</span>
+              </div>
+            </div>
+            <div id="screen-stage-progress-list" class="screen-stage-progress-list">
+              <div class="screen-progress-empty" data-i18n="stage.progress_waiting">等待运行进度。</div>
+            </div>
+          </div>
+        </section>
+        <section class="panel stage-panel">
+          <div class="section-head">
+            <h2 data-i18n="stage.generation_pool">生成池</h2>
+            <div class="inline-actions">
+              <span id="generated-agent-count" class="lane-count">0</span>
+              <span id="generated-property-count" class="lane-count gold-count">0</span>
+              <span id="activation-count" class="lane-count success">0</span>
+            </div>
+          </div>
+          <div class="generation-columns">
+            <div class="generation-column">
+              <div class="column-title" data-i18n="stage.generated_agents">已生成 Agent</div>
+              <div id="generated-agent-list" class="stage-list generation-list"></div>
+            </div>
+            <div class="generation-column">
+              <div class="column-title" data-i18n="stage.generated_properties">已生成房产</div>
+              <div id="generated-property-list" class="stage-list generation-list"></div>
+            </div>
+          </div>
+          <div class="column-title activated-title" data-i18n="stage.activated_agents">已激活 Agent</div>
+          <div id="activation-list" class="stage-list activation-stage"></div>
+        </section>
+
+        <section class="panel stage-panel exchange-stage-panel">
+          <div class="section-head">
+            <h2 data-i18n="stage.exchange_arena">交易舞台</h2>
+            <div class="inline-actions">
+              <span id="listed-property-count" class="lane-count gold-count">0</span>
+              <span id="match-attempt-count" class="lane-count">0</span>
+              <span id="negotiation-count" class="lane-count">0</span>
+              <span id="success-count" class="lane-count success">0</span>
+              <span id="failure-count" class="lane-count danger">0</span>
+            </div>
+          </div>
+          <div id="exchange-overlay" class="exchange-overlay"></div>
+          <div class="exchange-prelude">
+            <div class="exchange-strip">
+              <div class="column-title" data-i18n="stage.listings_this_month">本回合挂牌</div>
+              <div id="listed-property-list" class="stage-list prelude-list"></div>
+            </div>
+            <div class="exchange-strip">
+              <div class="column-title" data-i18n="stage.match_attempts">撮合尝试</div>
+              <div id="match-attempt-list" class="stage-list prelude-list"></div>
+            </div>
+            <div class="exchange-strip">
+              <div class="feed-head">
+                <div class="column-title" data-i18n="stage.negotiation_feed">谈判流</div>
+                <div class="feed-actions">
+                  <label class="focus-limit-group">
+                    <span class="lane-count" data-i18n="stage.quote_focus" title="Top quote focus">Quote 焦点</span>
+                    <select id="negotiation-quote-focus-limit" class="density-select">
+                      <option value="1">Top 1</option>
+                      <option value="2" selected>Top 2</option>
+                      <option value="3">Top 3</option>
+                      <option value="5">Top 5</option>
+                    </select>
+                  </label>
+                  <select id="negotiation-density-mode" class="density-select">
+                    <option value="hybrid" data-i18n="negotiation.hybrid">混合</option>
+                    <option value="summary" data-i18n="negotiation.summary">摘要</option>
+                    <option value="quotes" data-i18n="negotiation.quotes">原话</option>
+                  </select>
+                </div>
+              </div>
+              <div id="negotiation-list" class="stage-list prelude-list negotiation-feed"></div>
+            </div>
+          </div>
+          <div class="exchange-columns">
+            <div class="exchange-column">
+              <div class="column-title" data-i18n="stage.deals_closed">成交结果</div>
+              <div id="success-list" class="stage-list exchange-list"></div>
+            </div>
+            <div class="exchange-column">
+              <div class="column-title" data-i18n="stage.deals_failed">失败结果</div>
+              <div id="failure-list" class="stage-list exchange-list"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="bottom-grid">
+        <section class="panel archive-panel">
+        <div class="section-head">
+          <h2 data-i18n="archive.title">回合归档</h2>
+          <span id="archive-count" class="lane-count">0</span>
+        </div>
+        <div id="archive-list" class="archive-list"></div>
+        </section>
+
+        <section class="panel lane-panel">
+          <div class="section-head">
+            <h2 data-i18n="system.title">系统流</h2>
+            <div class="inline-actions">
+              <span id="system-count" class="lane-count">0</span>
+              <button id="clear-events" type="button" class="ghost" data-i18n="buttons.clear">清空</button>
+            </div>
+          </div>
+          <div id="system-list" class="event-list"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <template id="event-template">
+    <article class="event-item">
+      <div class="event-top">
+        <span class="event-type"></span>
+        <span class="event-meta"></span>
+      </div>
+      <pre class="event-payload"></pre>
+    </article>
+  </template>
+
+  <script type="module" src="/web/js/main.js"></script>
+</body>
+</html>

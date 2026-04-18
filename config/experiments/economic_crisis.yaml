@@ -1,0 +1,41 @@
+# ============================================
+# 研究场景配置：2008式经济危机 (Economic Crisis)
+# ============================================
+# 研究目标：模拟外生冲击下的市场崩盘和恢复过程
+
+# 月度环境与参数覆盖
+month_overrides:
+  3:  # 危机爆发
+    macro_override: "pessimistic"
+    # 模拟失业导致的Agent移除（需代码支持 month_overrides 处理逻辑）
+    system_event: "crisis_start"
+
+  6:  # 深度衰退
+    macro_override: "pessimistic"
+
+    # 收入下降
+    income_adjustment: -0.15  # 在职者收入降15%
+
+    # 贷款极度收紧
+    mortgage:
+      down_payment_ratio: 0.5
+      annual_interest_rate: 0.08
+      max_dti_ratio: 0.3
+
+  12:  # 缓慢恢复期
+    macro_override: "stable"
+
+# 决策因子调整
+decision_factors:
+  activation:
+    base_probability: 0.001  # 激活率降至0.1% (市场冻结)
+    weights:
+      low_cash_poor: -0.8  # 现金流压力极大
+      high_wealth_no_property: 0.0  # 抄底意愿低
+
+# 强制抛售机制及其触发阈值
+forced_sale:
+  enabled: true
+  trigger:
+    cash_below: 10000   # 现金极低强平
+    unemployment: true  # 失业强平

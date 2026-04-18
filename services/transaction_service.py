@@ -112,10 +112,28 @@ class TransactionService:
                 pass
         if self._table_exists(cursor, "profiled_market_property_buckets"):
             try:
-                cursor.execute("SELECT property_id, bucket_id FROM profiled_market_property_buckets")
+                has_metadata_json = self._column_exists(cursor, "profiled_market_property_buckets", "metadata_json")
+                if has_metadata_json:
+                    cursor.execute("SELECT property_id, bucket_id, metadata_json FROM profiled_market_property_buckets")
+                else:
+                    cursor.execute("SELECT property_id, bucket_id FROM profiled_market_property_buckets")
                 for row in cursor.fetchall() or []:
-                    if row and row[0] is not None and row[1] is not None:
-                        property_bucket_map[int(row[0])] = str(row[1])
+                    if not row or row[0] is None or row[1] is None:
+                        continue
+                    resolved_bucket = str(row[1])
+                    if len(row) >= 3 and row[2]:
+                        try:
+                            meta = json.loads(str(row[2]) or "{}")
+                        except Exception:
+                            meta = {}
+                        if isinstance(meta, dict):
+                            canonical_target_bucket_id = str(meta.get("canonical_target_bucket_id", "") or "").strip()
+                            fallback_base_bucket_id = str(meta.get("fallback_base_bucket_id", "") or "").strip()
+                            if canonical_target_bucket_id:
+                                resolved_bucket = canonical_target_bucket_id
+                            elif fallback_base_bucket_id:
+                                resolved_bucket = fallback_base_bucket_id
+                    property_bucket_map[int(row[0])] = resolved_bucket
             except Exception:
                 pass
         return buyer_bucket_map, property_bucket_map
@@ -324,6 +342,115 @@ class TransactionService:
         except Exception:
             return set()
 
+    def _load_active_locked_property_ids(self, cursor) -> set[int]:
+        if not self._table_exists(cursor, "transaction_orders"):
+            return set()
+        try:
+            cursor.execute(
+                """
+                SELECT DISTINCT property_id
+                FROM transaction_orders
+                WHERE property_id IS NOT NULL
+                  AND status IN ('pending', 'pending_settlement')
+                """
+            )
+            return {
+                int(r[0]) for r in (cursor.fetchall() or [])
+                if r and r[0] is not None
+            }
+        except Exception:
+            return set()
+
+    def _load_live_property_status_map(self, cursor, property_ids: set[int]) -> Dict[int, str]:
+        normalized_ids = {
+            int(pid) for pid in (property_ids or set())
+            if pid is not None and int(pid) >= 0
+        }
+        if not normalized_ids or not self._table_exists(cursor, "properties_market"):
+            return {}
+        placeholders = ",".join("?" for _ in normalized_ids)
+        try:
+            cursor.execute(
+                f"""
+                SELECT property_id, status
+                FROM properties_market
+                WHERE property_id IN ({placeholders})
+                """,
+                tuple(sorted(normalized_ids)),
+            )
+            return {
+                int(row[0]): str(row[1] or "MISSING")
+                for row in (cursor.fetchall() or [])
+                if row and row[0] is not None
+            }
+        except Exception:
+            return {}
+
+    def _filter_live_candidate_listings(
+        self,
+        cursor,
+        buyer_id: int,
+        listings: List[Dict],
+        same_month_seen_ids: Optional[set[int]] = None,
+    ) -> Tuple[List[Dict], Dict[str, int]]:
+        if not listings:
+            return [], {
+                "input_count": 0,
+                "kept_count": 0,
+                "removed_locked": 0,
+                "removed_not_for_sale": 0,
+                "removed_same_month_seen": 0,
+                "removed_self_owned": 0,
+            }
+        same_month_seen_ids = {
+            int(pid) for pid in (same_month_seen_ids or set())
+            if pid is not None
+        }
+        property_ids = set()
+        for item in listings:
+            try:
+                property_ids.add(int(item.get("property_id", -1)))
+            except Exception:
+                continue
+        locked_ids = self._load_active_locked_property_ids(cursor)
+        live_status_map = self._load_live_property_status_map(cursor, property_ids)
+        filtered_rows: List[Dict] = []
+        stats = {
+            "input_count": int(len(listings)),
+            "kept_count": 0,
+            "removed_locked": 0,
+            "removed_not_for_sale": 0,
+            "removed_same_month_seen": 0,
+            "removed_self_owned": 0,
+        }
+        for item in listings:
+            try:
+                pid = int(item.get("property_id", -1))
+            except Exception:
+                pid = -1
+            if pid < 0:
+                continue
+            owner_raw = item.get("owner_id", item.get("seller_id", -1))
+            try:
+                owner_id = int(owner_raw) if owner_raw is not None else -1
+            except Exception:
+                owner_id = -1
+            if owner_id == int(buyer_id):
+                stats["removed_self_owned"] += 1
+                continue
+            if pid in same_month_seen_ids:
+                stats["removed_same_month_seen"] += 1
+                continue
+            if pid in locked_ids:
+                stats["removed_locked"] += 1
+                continue
+            if str(live_status_map.get(pid, item.get("status", "MISSING")) or "MISSING") != "for_sale":
+                stats["removed_not_for_sale"] += 1
+                continue
+            filtered_rows.append(item)
+        stats["kept_count"] = int(len(filtered_rows))
+        return filtered_rows, stats
+
     def _load_buyer_last_seen_listing_prices(self, cursor, buyer_id: int, through_month: int) -> Dict[int, float]:
         if int(buyer_id) < 0 or int(through_month) <= 0:
             return {}
@@ -491,6 +618,205 @@ class TransactionService:
                 )
             except Exception:
                 continue
+
+    @staticmethod
+    def _recovery_area_band(area: float) -> str:
+        try:
+            val = float(area or 0.0)
+        except Exception:
+            val = 0.0
+        if val <= 0.0:
+            return "UNK"
+        if val < 70.0:
+            return "XS"
+        if val < 90.0:
+            return "S"
+        if val < 120.0:
+            return "M"
+        if val < 160.0:
+            return "L"
+        return "XL"
+
+    @staticmethod
+    def _recovery_price_band(price: float) -> str:
+        try:
+            val = float(price or 0.0)
+        except Exception:
+            val = 0.0
+        if val <= 0.0:
+            return "UNK"
+        if val < 1_500_000:
+            return "P1"
+        if val < 3_000_000:
+            return "P2"
+        if val < 5_000_000:
+            return "P3"
+        return "P4"
+
+    def _substitute_spillover_priority_weight(self, buyer: Agent) -> float:
+        timing_role = str(getattr(buyer, "timing_role", "") or "").strip().lower()
+        urgency = str(getattr(buyer, "decision_urgency", "") or "").strip().lower()
+        lifecycle_labels = {
+            str(x).strip().upper()
+            for x in (getattr(buyer, "lifecycle_labels", []) or [])
+            if str(x).strip()
+        }
+
+        if timing_role == "buy_now":
+            weight = 1.0
+        elif timing_role == "sell_then_buy":
+            weight = 0.95
+        elif timing_role == "sell_now":
+            weight = 0.20
+        elif timing_role in {"need_wait", "observe_wait"}:
+            weight = 0.0
+        else:
+            weight = 0.55 if bool(getattr(buyer, "_buy_task_locked", False)) else 0.35
+
+        urgency_bonus = {"high": 0.18, "medium": 0.08, "low": 0.0}.get(urgency, 0.0)
+        lifecycle_bonus = 0.0
+        if lifecycle_labels & {"DEADLINE_PRESSURE", "SPACE_SQUEEZE", "LIFE_SHOCK"}:
+            lifecycle_bonus += 0.10
+        if lifecycle_labels & {"CHAIN_BLOCKED", "CHAIN_UNLOCKED"}:
+            lifecycle_bonus += 0.05
+        return max(0.0, min(1.35, float(weight + urgency_bonus + lifecycle_bonus)))
+
+    def _set_buyer_substitute_spillover_context(
+        self,
+        buyer: Agent,
+        *,
+        listing: Dict,
+        prop: Dict,
+        month: int,
+        competition_strength: int,
+    ) -> None:
+        if buyer is None:
+            return
+        priority_weight = self._substitute_spillover_priority_weight(buyer)
+        if priority_weight <= 0.0:
+            return
+        try:
+            listed_price = float(listing.get("listed_price", listing.get("price", 0.0)) or 0.0)
+        except Exception:
+            listed_price = 0.0
+        try:
+            area = float(prop.get("building_area", 0.0) or 0.0)
+        except Exception:
+            area = 0.0
+        property_type = str(prop.get("property_type", "") or "").strip().upper() or "UNK"
+        zone = str(prop.get("zone", listing.get("zone", "")) or "").strip().upper() or "UNK"
+        is_school = bool(prop.get("is_school_district", listing.get("is_school_district", False)))
+        context = {
+            "month": int(month),
+            "source_property_id": int(listing.get("property_id", -1) or -1),
+            "zone": str(zone),
+            "is_school_district": bool(is_school),
+            "property_type": str(property_type),
+            "area_band": str(self._recovery_area_band(area)),
+            "price_band": str(self._recovery_price_band(listed_price)),
+            "listed_price": float(listed_price),
+            "priority_weight": float(priority_weight),
+            "competition_strength": max(1, int(competition_strength or 0)),
+            "timing_role": str(getattr(buyer, "timing_role", "") or ""),
+            "decision_urgency": str(getattr(buyer, "decision_urgency", "") or ""),
+            "lifecycle_labels": list(getattr(buyer, "lifecycle_labels", []) or []),
+        }
+        setattr(buyer, "substitute_spillover_context", context)
+        setattr(buyer, "substitute_spillover_month", int(month))
+
+    def _compute_recovery_spillover_bonus(
+        self,
+        buyer: Agent,
+        *,
+        listing: Dict,
+        prop: Dict,
+        month: int,
+    ) -> Tuple[float, Dict[str, object]]:
+        raw_ctx = getattr(buyer, "substitute_spillover_context", {}) or {}
+        spillover_month = int(getattr(buyer, "substitute_spillover_month", -1) or -1)
+        if not isinstance(raw_ctx, dict) or not raw_ctx or spillover_month != int(month):
+            return 0.0, {"enabled": False}
+
+        try:
+            pid = int(listing.get("property_id", -1) or -1)
+        except Exception:
+            pid = -1
+        if pid <= 0 or pid == int(raw_ctx.get("source_property_id", -1) or -1):
+            return 0.0, {"enabled": False, "same_source": True}
+
+        try:
+            listed_price = float(listing.get("listed_price", listing.get("price", 0.0)) or 0.0)
+        except Exception:
+            listed_price = 0.0
+        try:
+            area = float(prop.get("building_area", 0.0) or 0.0)
+        except Exception:
+            area = 0.0
+        zone = str(prop.get("zone", listing.get("zone", "")) or "").strip().upper()
+        is_school = bool(prop.get("is_school_district", listing.get("is_school_district", False)))
+        property_type = str(prop.get("property_type", "") or "").strip().upper() or "UNK"
+
+        source_price = float(raw_ctx.get("listed_price", 0.0) or 0.0)
+        source_zone = str(raw_ctx.get("zone", "") or "").strip().upper()
+        source_school = bool(raw_ctx.get("is_school_district", False))
+        source_type = str(raw_ctx.get("property_type", "") or "").strip().upper() or "UNK"
+        source_area_band = str(raw_ctx.get("area_band", "UNK") or "UNK")
+        source_price_band = str(raw_ctx.get("price_band", "UNK") or "UNK")
+
+        similarity = 0.0
+        reasons: List[str] = []
+        if zone and source_zone and zone == source_zone:
+            similarity += 0.28
+            reasons.append("same_zone")
+        if bool(is_school) == bool(source_school):
+            similarity += 0.18
+            reasons.append("same_school_flag")
+        if property_type == source_type:
+            similarity += 0.18
+            reasons.append("same_property_type")
+
+        area_band = self._recovery_area_band(area)
+        if area_band == source_area_band and area_band != "UNK":
+            similarity += 0.16
+            reasons.append("same_area_band")
+        elif area > 0.0 and source_area_band != "UNK":
+            similarity += 0.06
+            reasons.append("near_area_band")
+
+        price_band = self._recovery_price_band(listed_price)
+        if price_band == source_price_band and price_band != "UNK":
+            similarity += 0.12
+            reasons.append("same_price_band")
+        if listed_price > 0.0 and source_price > 0.0:
+            gap_ratio = abs(listed_price - source_price) / max(source_price, 1.0)
+            if gap_ratio <= 0.10:
+                similarity += 0.16
+                reasons.append("near_price")
+            elif gap_ratio <= 0.20:
+                similarity += 0.08
+                reasons.append("mid_price")
+
+        similarity = max(0.0, min(1.0, float(similarity)))
+        if similarity <= 0.0:
+            return 0.0, {
+                "enabled": True,
+                "similarity": 0.0,
+                "priority_weight": float(raw_ctx.get("priority_weight", 0.0) or 0.0),
+                "reasons": reasons,
+            }
+
+        priority_weight = max(0.0, min(1.5, float(raw_ctx.get("priority_weight", 0.0) or 0.0)))
+        competition_strength = max(1.0, float(raw_ctx.get("competition_strength", 1.0) or 1.0))
+        competition_factor = min(1.0, competition_strength / 2.0)
+        bonus = float(similarity * priority_weight * competition_factor)
+        return max(0.0, min(1.25, bonus)), {
+            "enabled": True,
+            "similarity": float(round(similarity, 4)),
+            "priority_weight": float(round(priority_weight, 4)),
+            "competition_factor": float(round(competition_factor, 4)),
+            "reasons": reasons,
+            "source_property_id": int(raw_ctx.get("source_property_id", -1) or -1),
+        }
 
     def _enqueue_decision_log(self, row: Tuple):
         self._decision_log_buffer.append(row)
@@ -1056,6 +1382,7 @@ class TransactionService:
                 float(selected_price),
                 market,
                 config=selected_exec_config,
+                transaction_month=int(month),
             )
             if not tx_record:
                 tx_error_code = str(getattr(selected_buyer, "_last_tx_error_code", "") or "")
@@ -1303,33 +1630,60 @@ class TransactionService:
             cursor.execute(
                 """
                 SELECT
-                    COUNT(*) AS matches,
-                    COUNT(DISTINCT buyer_id) AS interest_buyers,
+                    COUNT(*) AS exposure_matches,
+                    COUNT(DISTINCT buyer_id) AS exposure_buyers,
+                    SUM(CASE WHEN selected_in_shortlist=1 THEN 1 ELSE 0 END) AS commitment_entries,
+                    COUNT(DISTINCT CASE WHEN selected_in_shortlist=1 THEN buyer_id ELSE NULL END) AS commitment_buyers,
                     SUM(CASE WHEN is_valid_bid=1 THEN 1 ELSE 0 END) AS valid_bids,
                     SUM(CASE WHEN proceeded_to_negotiation=1 THEN 1 ELSE 0 END) AS negotiation_entries,
                     SUM(CASE WHEN COALESCE(failure_reason,'') LIKE 'Outbid:%' THEN 1 ELSE 0 END) AS outbid_losses,
+                    COUNT(DISTINCT CASE
+                        WHEN is_valid_bid=1 OR proceeded_to_negotiation=1 OR order_id IS NOT NULL
+                        THEN buyer_id ELSE NULL END
+                    ) AS competition_buyers,
+                    SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) AS order_entries,
                     MAX(CASE WHEN is_valid_bid=1 THEN buyer_bid ELSE NULL END) AS best_valid_bid
                 FROM property_buyer_matches
                 WHERE property_id=? AND month BETWEEN ? AND ?
                 """,
                 (int(property_id), int(start_month), int(end_month)),
             )
-            row = cursor.fetchone() or (0, 0, 0, 0, 0, None)
+            row = cursor.fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0, None)
         except Exception:
-            row = (0, 0, 0, 0, 0, None)
+            row = (0, 0, 0, 0, 0, 0, 0, 0, 0, None)
 
-        matches = int(row[0] or 0)
-        interest_buyers = int(row[1] or 0)
-        valid_bids = int(row[2] or 0)
-        negotiation_entries = int(row[3] or 0)
-        outbid_losses = int(row[4] or 0)
-        best_valid_bid = float(row[5] or 0.0)
+        recent_transaction_count = 0
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM transactions
+                WHERE property_id=? AND month BETWEEN ? AND ?
+                """,
+                (int(property_id), int(start_month), int(end_month)),
+            )
+            tx_row = cursor.fetchone()
+            recent_transaction_count = int((tx_row[0] if tx_row else 0) or 0)
+        except Exception:
+            recent_transaction_count = 0
+
+        exposure_matches = int(row[0] or 0)
+        exposure_buyers = int(row[1] or 0)
+        commitment_entries = int(row[2] or 0)
+        commitment_buyers = int(row[3] or 0)
+        valid_bids = int(row[4] or 0)
+        negotiation_entries = int(row[5] or 0)
+        outbid_losses = int(row[6] or 0)
+        competition_buyers = int(row[7] or 0)
+        order_entries = int(row[8] or 0)
+        best_valid_bid = float(row[9] or 0.0)
 
         property_score = (
             0.34 * min(1.0, valid_bids / 3.0)
-            + 0.26 * min(1.0, negotiation_entries / 2.0)
-            + 0.24 * min(1.0, outbid_losses / 2.0)
-            + 0.16 * min(1.0, matches / 5.0)
+            + 0.24 * min(1.0, negotiation_entries / 2.0)
+            + 0.20 * min(1.0, outbid_losses / 2.0)
+            + 0.14 * min(1.0, competition_buyers / 3.0)
+            + 0.08 * min(1.0, commitment_buyers / 3.0)
         )
 
         zone = ""
@@ -1340,50 +1694,79 @@ class TransactionService:
         except Exception:
             zone = ""
 
-        zone_matches = 0
+        zone_exposure_matches = 0
+        zone_exposure_buyers = 0
+        zone_commitment_entries = 0
+        zone_commitment_buyers = 0
         zone_valid_bids = 0
         zone_negotiation_entries = 0
         zone_outbid_losses = 0
+        zone_competition_buyers = 0
+        zone_order_entries = 0
         zone_score = 0.0
         if zone:
             try:
                 cursor.execute(
                     """
                     SELECT
-                        COUNT(*) AS matches,
+                        COUNT(*) AS exposure_matches,
+                        COUNT(DISTINCT pbm.buyer_id) AS exposure_buyers,
+                        SUM(CASE WHEN pbm.selected_in_shortlist=1 THEN 1 ELSE 0 END) AS commitment_entries,
+                        COUNT(DISTINCT CASE WHEN pbm.selected_in_shortlist=1 THEN pbm.buyer_id ELSE NULL END) AS commitment_buyers,
                         SUM(CASE WHEN pbm.is_valid_bid=1 THEN 1 ELSE 0 END) AS valid_bids,
                         SUM(CASE WHEN pbm.proceeded_to_negotiation=1 THEN 1 ELSE 0 END) AS negotiation_entries,
-                        SUM(CASE WHEN COALESCE(pbm.failure_reason,'') LIKE 'Outbid:%' THEN 1 ELSE 0 END) AS outbid_losses
+                        SUM(CASE WHEN COALESCE(pbm.failure_reason,'') LIKE 'Outbid:%' THEN 1 ELSE 0 END) AS outbid_losses,
+                        COUNT(DISTINCT CASE
+                            WHEN pbm.is_valid_bid=1 OR pbm.proceeded_to_negotiation=1 OR pbm.order_id IS NOT NULL
+                            THEN pbm.buyer_id ELSE NULL END
+                        ) AS competition_buyers,
+                        SUM(CASE WHEN pbm.order_id IS NOT NULL THEN 1 ELSE 0 END) AS order_entries
                     FROM property_buyer_matches pbm
                     JOIN properties_static ps ON ps.property_id = pbm.property_id
                     WHERE ps.zone=? AND pbm.month BETWEEN ? AND ?
                     """,
                     (zone, int(start_month), int(end_month)),
                 )
-                z_row = cursor.fetchone() or (0, 0, 0, 0)
-                zone_matches = int(z_row[0] or 0)
-                zone_valid_bids = int(z_row[1] or 0)
-                zone_negotiation_entries = int(z_row[2] or 0)
-                zone_outbid_losses = int(z_row[3] or 0)
+                z_row = cursor.fetchone() or (0, 0, 0, 0, 0, 0, 0, 0, 0)
+                zone_exposure_matches = int(z_row[0] or 0)
+                zone_exposure_buyers = int(z_row[1] or 0)
+                zone_commitment_entries = int(z_row[2] or 0)
+                zone_commitment_buyers = int(z_row[3] or 0)
+                zone_valid_bids = int(z_row[4] or 0)
+                zone_negotiation_entries = int(z_row[5] or 0)
+                zone_outbid_losses = int(z_row[6] or 0)
+                zone_competition_buyers = int(z_row[7] or 0)
+                zone_order_entries = int(z_row[8] or 0)
             except Exception:
-                zone_matches = zone_valid_bids = zone_negotiation_entries = zone_outbid_losses = 0
+                zone_exposure_matches = 0
+                zone_exposure_buyers = 0
+                zone_commitment_entries = 0
+                zone_commitment_buyers = 0
+                zone_valid_bids = 0
+                zone_negotiation_entries = 0
+                zone_outbid_losses = 0
+                zone_competition_buyers = 0
+                zone_order_entries = 0
 
             zone_match_norm = float((cfg or {}).get("heat_zone_match_norm", 16.0))
             zone_valid_norm = float((cfg or {}).get("heat_zone_valid_bid_norm", 10.0))
             zone_neg_norm = float((cfg or {}).get("heat_zone_negotiation_norm", 8.0))
             zone_outbid_norm = float((cfg or {}).get("heat_zone_outbid_norm", 6.0))
+            zone_competition_norm = float((cfg or {}).get("heat_zone_competition_norm", 8.0))
+            zone_commitment_norm = float((cfg or {}).get("heat_zone_commitment_norm", 10.0))
             zone_score = (
                 0.34 * min(1.0, zone_valid_bids / max(1.0, zone_valid_norm))
                 + 0.26 * min(1.0, zone_negotiation_entries / max(1.0, zone_neg_norm))
                 + 0.24 * min(1.0, zone_outbid_losses / max(1.0, zone_outbid_norm))
-                + 0.16 * min(1.0, zone_matches / max(1.0, zone_match_norm))
+                + 0.10 * min(1.0, zone_competition_buyers / max(1.0, zone_competition_norm))
+                + 0.06 * min(1.0, zone_commitment_buyers / max(1.0, zone_commitment_norm))
             )
 
         zone_mix_weight = max(0.0, min(0.80, float((cfg or {}).get("heat_zone_mix_weight", 0.35))))
         score = (1.0 - zone_mix_weight) * float(property_score) + zone_mix_weight * float(zone_score)
 
         # If the single listing is fresh but the zone is clearly hot, avoid "all-LOW" collapse.
-        if matches == 0 and zone_score >= float((cfg or {}).get("heat_property_floor_on_zone_hot", 0.14)):
+        if competition_buyers == 0 and zone_score >= float((cfg or {}).get("heat_property_floor_on_zone_hot", 0.14)):
             score = max(float(score), float((cfg or {}).get("heat_property_floor_on_zone_hot", 0.14)))
 
         medium_th = max(0.05, min(0.80, float((cfg or {}).get("heat_medium_threshold", 0.16))))
@@ -1419,22 +1802,96 @@ class TransactionService:
             else:
                 break
 
+        exposure_threshold = max(
+            1,
+            int(
+                (cfg or {}).get(
+                    "fake_hot_historical_match_threshold",
+                    self.config.get(
+                        "smart_agent.candidate_fake_hot_historical_match_threshold",
+                        self.config.get("candidate_fake_hot_historical_match_threshold", 10),
+                    ),
+                )
+            ),
+        )
+        negotiation_ratio_threshold = max(
+            0.0,
+            min(
+                1.0,
+                float(
+                    (cfg or {}).get(
+                        "fake_hot_negotiation_ratio_threshold",
+                        self.config.get(
+                            "smart_agent.candidate_fake_hot_negotiation_ratio_threshold",
+                            self.config.get("candidate_fake_hot_negotiation_ratio_threshold", 0.20),
+                        ),
+                    )
+                ),
+            ),
+        )
+        commitment_ratio_threshold = max(
+            0.0,
+            min(
+                1.0,
+                float(
+                    (cfg or {}).get(
+                        "fake_hot_commitment_ratio_threshold",
+                        self.config.get(
+                            "smart_agent.candidate_fake_hot_commitment_ratio_threshold",
+                            self.config.get(
+                                "candidate_fake_hot_commitment_ratio_threshold",
+                                negotiation_ratio_threshold,
+                            ),
+                        ),
+                    )
+                ),
+            ),
+        )
+        commitment_ratio = (
+            float(commitment_buyers) / float(max(1, exposure_buyers))
+            if exposure_buyers > 0
+            else 0.0
+        )
+        negotiation_ratio = (
+            float(negotiation_entries) / float(max(1, exposure_matches))
+            if exposure_matches > 0
+            else 0.0
+        )
+        fake_hot_historical = bool(
+            exposure_matches >= exposure_threshold
+            and commitment_ratio <= commitment_ratio_threshold
+            and negotiation_ratio <= negotiation_ratio_threshold
+            and recent_transaction_count <= 0
+        )
+
         return {
             "lookback_months": int(lookback),
             "window_start_month": int(start_month),
             "window_end_month": int(end_month),
             "zone": zone,
-            "matches": matches,
-            "interest_buyers": interest_buyers,
+            "matches": exposure_matches,
+            "interest_buyers": exposure_buyers,
+            "exposure_matches": exposure_matches,
+            "exposure_buyers": exposure_buyers,
+            "commitment_entries": commitment_entries,
+            "commitment_buyers": commitment_buyers,
             "valid_bids": valid_bids,
             "negotiation_entries": negotiation_entries,
             "outbid_losses": outbid_losses,
+            "competition_buyers": competition_buyers,
+            "order_entries": order_entries,
             "best_valid_bid": round(float(best_valid_bid), 2),
             "property_score": round(float(property_score), 4),
-            "zone_matches": zone_matches,
+            "zone_matches": zone_exposure_matches,
+            "zone_exposure_matches": zone_exposure_matches,
+            "zone_exposure_buyers": zone_exposure_buyers,
+            "zone_commitment_entries": zone_commitment_entries,
+            "zone_commitment_buyers": zone_commitment_buyers,
             "zone_valid_bids": zone_valid_bids,
             "zone_negotiation_entries": zone_negotiation_entries,
             "zone_outbid_losses": zone_outbid_losses,
+            "zone_competition_buyers": zone_competition_buyers,
+            "zone_order_entries": zone_order_entries,
             "zone_score": round(float(zone_score), 4),
             "zone_mix_weight": round(float(zone_mix_weight), 3),
             "medium_threshold": round(float(medium_th), 3),
@@ -1443,6 +1900,10 @@ class TransactionService:
             "band": band,
             "trailing_zero_valid_bid_streak": int(trailing_zero_valid_bid_streak),
             "latest_month_valid_bids": int(monthly_valid_bids.get(end_month, 0)),
+            "recent_transaction_count": int(recent_transaction_count),
+            "commitment_ratio": round(float(commitment_ratio), 4),
+            "negotiation_ratio": round(float(negotiation_ratio), 4),
+            "fake_hot_historical": bool(fake_hot_historical),
         }
 
     def _collect_cold_listing_signal(
@@ -1764,7 +2225,8 @@ class TransactionService:
         listing_duration: int,
     ) -> Dict[str, object]:
         valid_bids = int((demand_context or {}).get("valid_bids", 0) or 0)
-        matches = int((demand_context or {}).get("matches", 0) or 0)
+        commitment_buyers = int((demand_context or {}).get("commitment_buyers", 0) or 0)
+        competition_buyers = int((demand_context or {}).get("competition_buyers", 0) or 0)
         negotiations = int((demand_context or {}).get("negotiation_entries", 0) or 0)
         best_valid_bid = float((demand_context or {}).get("best_valid_bid", 0.0) or 0.0)
         next_month_holding_cost = float(max(1.0, current_price) * 0.005)
@@ -1772,10 +2234,11 @@ class TransactionService:
             next_month_holding_cost / max(1.0, float(current_price) * 0.015)
         ) * 100.0
         sale_prob_proxy = self._clamp01(
-            0.30 * min(1.0, matches / 4.0)
+            0.20 * min(1.0, commitment_buyers / 3.0)
             + 0.35 * min(1.0, valid_bids / 2.0)
-            + 0.20 * min(1.0, negotiations / 2.0)
-            + 0.15 * min(1.0, best_valid_bid / max(1.0, current_price))
+            + 0.25 * min(1.0, negotiations / 2.0)
+            + 0.10 * min(1.0, competition_buyers / 3.0)
+            + 0.10 * min(1.0, best_valid_bid / max(1.0, current_price))
         ) * 100.0
         liquidity_risk = 100.0 - sale_prob_proxy
         if deadline_months_left is None:
@@ -1830,8 +2293,8 @@ class TransactionService:
 
         valid_bids = int((demand_context or {}).get("valid_bids", 0) or 0)
         negotiations = int((demand_context or {}).get("negotiation_entries", 0) or 0)
-        matches = int((demand_context or {}).get("matches", 0) or 0)
-        demand_cold = (valid_bids == 0 and negotiations == 0 and matches <= 1)
+        commitment_buyers = int((demand_context or {}).get("commitment_buyers", 0) or 0)
+        demand_cold = (valid_bids == 0 and negotiations == 0 and commitment_buyers <= 0)
 
         ratio = float(base_ratio)
         if action == "C":
@@ -2946,6 +3409,196 @@ class TransactionService:
             "max_stage2_fill": max(1, min(16, int(max_stage2_fill))),
         }
 
+    def _resolve_candidate_heat_controls(self) -> Dict[str, object]:
+        try:
+            enabled_raw = self.config.get(
+                "smart_agent.candidate_fake_hot_circuit_enabled",
+                self.config.get("candidate_fake_hot_circuit_enabled", True),
+            )
+            if isinstance(enabled_raw, bool):
+                enabled = enabled_raw
+            else:
+                enabled = str(enabled_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+        except Exception:
+            enabled = True
+        try:
+            lookback_months = int(
+                self.config.get(
+                    "smart_agent.candidate_fake_hot_lookback_months",
+                    self.config.get("candidate_fake_hot_lookback_months", 2),
+                )
+            )
+        except Exception:
+            lookback_months = 2
+        try:
+            match_threshold = int(
+                self.config.get(
+                    "smart_agent.candidate_fake_hot_historical_match_threshold",
+                    self.config.get("candidate_fake_hot_historical_match_threshold", 10),
+                )
+            )
+        except Exception:
+            match_threshold = 10
+        try:
+            negotiation_ratio_threshold = float(
+                self.config.get(
+                    "smart_agent.candidate_fake_hot_negotiation_ratio_threshold",
+                    self.config.get("candidate_fake_hot_negotiation_ratio_threshold", 0.20),
+                )
+            )
+        except Exception:
+            negotiation_ratio_threshold = 0.20
+        try:
+            commitment_ratio_threshold = float(
+                self.config.get(
+                    "smart_agent.candidate_fake_hot_commitment_ratio_threshold",
+                    self.config.get(
+                        "candidate_fake_hot_commitment_ratio_threshold",
+                        negotiation_ratio_threshold,
+                    ),
+                )
+            )
+        except Exception:
+            commitment_ratio_threshold = negotiation_ratio_threshold
+        return {
+            "enabled": bool(enabled),
+            "lookback_months": max(1, min(6, int(lookback_months))),
+            "match_threshold": max(2, min(50, int(match_threshold))),
+            "negotiation_ratio_threshold": max(0.0, min(1.0, float(negotiation_ratio_threshold))),
+            "commitment_ratio_threshold": max(0.0, min(1.0, float(commitment_ratio_threshold))),
+        }
+
+    def _build_candidate_heat_meta_map(
+        self,
+        cursor,
+        month: int,
+        active_listings: List[Dict],
+    ) -> Dict[int, Dict[str, object]]:
+        if not active_listings:
+            return {}
+        heat_cfg = self._resolve_candidate_heat_controls()
+        listing_ids: List[int] = []
+        for item in active_listings:
+            try:
+                pid = int(item.get("property_id"))
+            except Exception:
+                continue
+            listing_ids.append(pid)
+        listing_ids = sorted(set(listing_ids))
+        if not listing_ids:
+            return {}
+
+        exposure_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        commitment_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        competition_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        negotiation_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        valid_bid_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        outbid_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        transaction_counts: Dict[int, int] = {pid: 0 for pid in listing_ids}
+        lookback_months = int(heat_cfg.get("lookback_months", 2) or 2)
+        start_month = max(1, int(month) - int(lookback_months))
+        end_month = max(1, int(month) - 1)
+        placeholders = ",".join("?" for _ in listing_ids)
+
+        if end_month >= start_month:
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT property_id,
+                           COUNT(*) AS exposure_count,
+                           SUM(CASE WHEN selected_in_shortlist=1 THEN 1 ELSE 0 END) AS commitment_count,
+                           COUNT(DISTINCT CASE
+                               WHEN is_valid_bid=1 OR proceeded_to_negotiation=1 OR order_id IS NOT NULL
+                               THEN buyer_id ELSE NULL END
+                           ) AS competition_count,
+                           SUM(CASE WHEN is_valid_bid=1 THEN 1 ELSE 0 END) AS valid_bid_count,
+                           SUM(CASE WHEN proceeded_to_negotiation=1 THEN 1 ELSE 0 END) AS negotiation_count,
+                           SUM(CASE WHEN COALESCE(failure_reason,'') LIKE 'Outbid:%' THEN 1 ELSE 0 END) AS outbid_count
+                    FROM property_buyer_matches
+                    WHERE month BETWEEN ? AND ?
+                      AND property_id IN ({placeholders})
+                    GROUP BY property_id
+                    """,
+                    tuple([int(start_month), int(end_month)] + listing_ids),
+                )
+                for row in cursor.fetchall() or []:
+                    if not row or row[0] is None:
+                        continue
+                    pid = int(row[0])
+                    exposure_counts[pid] = int(row[1] or 0)
+                    commitment_counts[pid] = int(row[2] or 0)
+                    competition_counts[pid] = int(row[3] or 0)
+                    valid_bid_counts[pid] = int(row[4] or 0)
+                    negotiation_counts[pid] = int(row[5] or 0)
+                    outbid_counts[pid] = int(row[6] or 0)
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT property_id, COUNT(*)
+                    FROM transactions
+                    WHERE month BETWEEN ? AND ?
+                      AND property_id IN ({placeholders})
+                    GROUP BY property_id
+                    """,
+                    tuple([int(start_month), int(end_month)] + listing_ids),
+                )
+                for row in cursor.fetchall() or []:
+                    if not row or row[0] is None:
+                        continue
+                    transaction_counts[int(row[0])] = int(row[1] or 0)
+            except Exception:
+                pass
+
+        heat_meta_map: Dict[int, Dict[str, object]] = {}
+        threshold = int(heat_cfg.get("match_threshold", 10) or 10)
+        ratio_threshold = float(heat_cfg.get("negotiation_ratio_threshold", 0.20) or 0.20)
+        commitment_ratio_threshold = float(heat_cfg.get("commitment_ratio_threshold", ratio_threshold) or ratio_threshold)
+        for pid in listing_ids:
+            exposure_count = int(exposure_counts.get(pid, 0) or 0)
+            commitment_count = int(commitment_counts.get(pid, 0) or 0)
+            competition_count = int(competition_counts.get(pid, 0) or 0)
+            valid_bid_count = int(valid_bid_counts.get(pid, 0) or 0)
+            negotiation_count = int(negotiation_counts.get(pid, 0) or 0)
+            outbid_count = int(outbid_counts.get(pid, 0) or 0)
+            transaction_count = int(transaction_counts.get(pid, 0) or 0)
+            commitment_ratio = float(commitment_count / max(1, exposure_count)) if exposure_count > 0 else 0.0
+            negotiation_ratio = float(negotiation_count / max(1, exposure_count)) if exposure_count > 0 else 0.0
+            hot_score = min(
+                1.0,
+                (
+                    min(1.0, float(competition_count) / max(1.0, 3.0)) * 0.40
+                    + min(1.0, float(valid_bid_count) / max(1.0, 3.0)) * 0.22
+                    + min(1.0, float(negotiation_count) / max(1.0, 2.0)) * 0.18
+                    + min(1.0, float(outbid_count) / max(1.0, 2.0)) * 0.12
+                    + min(1.0, float(transaction_count) / 2.0) * 0.08
+                ),
+            )
+            fake_hot_historical = bool(
+                bool(heat_cfg.get("enabled", True))
+                and exposure_count >= threshold
+                and commitment_ratio <= commitment_ratio_threshold
+                and negotiation_ratio <= ratio_threshold
+                and transaction_count <= 0
+            )
+            heat_meta_map[int(pid)] = {
+                "recent_match_count": int(exposure_count),
+                "recent_exposure_count": int(exposure_count),
+                "recent_commitment_count": int(commitment_count),
+                "recent_competition_count": int(competition_count),
+                "recent_valid_bid_count": int(valid_bid_count),
+                "recent_negotiation_count": int(negotiation_count),
+                "recent_outbid_count": int(outbid_count),
+                "recent_transaction_count": int(transaction_count),
+                "recent_commitment_ratio": float(round(commitment_ratio, 6)),
+                "recent_negotiation_ratio": float(round(negotiation_ratio, 6)),
+                "hot_listing_score": float(round(hot_score, 6)),
+                "real_competition_score": float(round(hot_score, 6)),
+                "fake_hot_historical": bool(fake_hot_historical),
+            }
+        return heat_meta_map
+
     def _reprioritize_quota_replacement_candidates(
         self,
         buyer: Agent,
@@ -3141,6 +3794,20 @@ class TransactionService:
         except Exception:
             pending_counts = {}
 
+        same_month_seen_ids = {
+            int(x)
+            for x in (getattr(buyer, "_same_month_seen_property_ids", []) or [])
+            if x is not None
+        }
+        live_status_map = self._load_live_property_status_map(
+            cursor,
+            {
+                int(li.get("property_id", -1))
+                for li in (active_listings or [])
+                if li.get("property_id") is not None
+            },
+        )
+
         refill_rows: List[Tuple[Tuple[float, ...], Dict]] = []
         for li in active_listings:
             try:
@@ -3155,6 +3822,12 @@ class TransactionService:
             if candidate_id_whitelist is not None and pid not in candidate_id_whitelist:
                 continue
             if pid < 0 or pid in blocked_property_ids or pid in attempted_property_ids:
+                continue
+            if pid in same_month_seen_ids:
+                continue
+            if int(pending_counts.get(pid, 0) or 0) > 0:
+                continue
+            if str(live_status_map.get(pid, li.get("status", "MISSING")) or "MISSING") != "for_sale":
                 continue
             prop = props_map.get(pid) or {}
             owner_val = li.get("owner_id", li.get("seller_id", prop.get("owner_id", -1)))
@@ -3219,10 +3892,17 @@ class TransactionService:
             same_zone = 1.0 if (target_zone in {"A", "B"} and zone == target_zone) else 0.0
             school_match = 1.0 if (need_school and is_school) else (0.5 if not need_school else 0.0)
             price_fit = 1.0 - min(1.0, price_ratio) if max_price > 0 else 0.0
+            spillover_bonus, spillover_meta = self._compute_recovery_spillover_bonus(
+                buyer,
+                listing=li,
+                prop=prop or {},
+                month=int(month),
+            )
 
             refill_rows.append(
                 (
                     (
+                        float(spillover_bonus),
                         float(same_zone),
                         float(school_match),
                         float(affordability_headroom),
@@ -3240,6 +3920,11 @@ class TransactionService:
                         "quota_limit": int(quota_limit),
                         "zone": str(zone),
                         "is_school_district": bool(is_school),
+                        "spillover_bonus": float(spillover_bonus),
+                        "spillover_similarity_score": float(spillover_meta.get("similarity", 0.0) or 0.0),
+                        "spillover_priority_weight": float(spillover_meta.get("priority_weight", 0.0) or 0.0),
+                        "spillover_reasons": list(spillover_meta.get("reasons", []) or []),
+                        "spillover_source_property_id": int(spillover_meta.get("source_property_id", -1) or -1),
                         "same_zone_score": float(same_zone),
                         "school_match_score": float(school_match),
                         "affordability_headroom": float(affordability_headroom),
@@ -3310,6 +3995,9 @@ class TransactionService:
                     "near_equal_tiebreak": bool(near_equal_tiebreak),
                     "prefers_low_competition": bool(prefers_low_competition),
                     "prefers_budget_headroom": bool(prefers_budget_headroom),
+                    "spillover_source_property_id": int(
+                        ((getattr(buyer, "substitute_spillover_context", {}) or {}).get("source_property_id", -1) or -1)
+                    ),
                     "blocked_property_ids": [int(x) for x in sorted(blocked_property_ids)],
                     "attempted_property_ids": [int(x) for x in sorted(attempted_property_ids)],
                     "candidate_ids": [int(x["property_id"]) for x in refill_candidates],
@@ -3325,6 +4013,7 @@ class TransactionService:
         pid = int(candidate.get("property_id", -1) or -1)
         usage_penalty = float((promotion_usage or {}).get(pid, 0) or 0)
         return (
+            float(candidate.get("spillover_bonus", 0.0) or 0.0),
             float(candidate.get("same_zone_score", 0.0) or 0.0),
             float(candidate.get("school_match_score", 0.0) or 0.0),
             float(candidate.get("affordability_headroom", 0.0) or 0.0),
@@ -3343,8 +4032,8 @@ class TransactionService:
     ) -> Dict[int, float]:
         """
         Build per-property pressure for shortlist diversification.
-        +positive: hot listings (many recent matches) => penalty
-        -negative: cold listings (recently no matches) => bonus
+        +positive: listings with repeated real commitment/competition => penalty
+        -negative: listings with no recent commitment => bonus
         """
         if not active_listings:
             return {}
@@ -3421,7 +4110,15 @@ class TransactionService:
             end_month = max(1, int(month) - 1)
             placeholders = ",".join("?" for _ in listing_ids)
             sql = f"""
-                SELECT property_id, COUNT(*)
+                SELECT property_id,
+                       SUM(
+                           CASE
+                               WHEN selected_in_shortlist=1
+                                    OR proceeded_to_negotiation=1
+                                    OR order_id IS NOT NULL
+                               THEN 1 ELSE 0
+                           END
+                       ) AS committed_count
                 FROM property_buyer_matches
                 WHERE month BETWEEN ? AND ?
                   AND property_id IN ({placeholders})
@@ -4043,6 +4740,158 @@ class TransactionService:
             return "LLM_STOP_SIGNALLED"
         return "NO_ELIGIBLE_CANDIDATE"
 
+    def _audit_supply_visibility_for_buyer(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        buyer: Agent,
+    ) -> Dict[str, Any]:
+        """
+        Diagnostic only: estimate whether a buyer has suitable supply that is not currently listed.
+
+        This must not change buyer autonomy or transaction rules. It is used to explain:
+        - no suitable listed supply
+        - versus suitable supply exists but is unlisted (potential supply)
+        - versus mechanism blocked (bucket alignment missing)
+        """
+        buyer_id = int(getattr(buyer, "id", -1) or -1)
+        if buyer_id <= 0:
+            return {"mode": "disabled", "reason": "buyer_id_missing"}
+
+        ctx = self._resolve_hard_bucket_context(cursor)
+        if not bool(ctx.get("enabled", False)):
+            return {"mode": "disabled", "reason": "hard_bucket_disabled"}
+
+        buyer_bucket_map = ctx.get("buyer_bucket_map", {}) or {}
+        alignment_map = ctx.get("alignment_map", {}) or {}
+        require_profiled_buyer = bool(ctx.get("require_profiled_buyer", False))
+
+        buyer_bucket = str(buyer_bucket_map.get(int(buyer_id), "") or "").strip()
+        if not buyer_bucket:
+            return {
+                "mode": "hard_bucket",
+                "blocked": bool(require_profiled_buyer),
+                "blocked_reason": "buyer_bucket_missing",
+                "buyer_bucket": "",
+                "allowed_property_buckets": [],
+            }
+
+        allowed_buckets = set(alignment_map.get(buyer_bucket, set()) or set())
+        if not allowed_buckets:
+            return {
+                "mode": "hard_bucket",
+                "blocked": True,
+                "blocked_reason": "alignment_missing",
+                "buyer_bucket": buyer_bucket,
+                "allowed_property_buckets": [],
+            }
+
+        max_price = 0.0
+        pref = getattr(buyer, "preference", None)
+        try:
+            max_price = float(getattr(pref, "max_price", 0.0) or 0.0)
+        except Exception:
+            max_price = 0.0
+        if max_price <= 0 and self._table_exists(cursor, "agents_finance"):
+            try:
+                cursor.execute(
+                    "SELECT max_affordable_price FROM agents_finance WHERE agent_id=?",
+                    (int(buyer_id),),
+                )
+                row = cursor.fetchone()
+                if row and row[0] is not None:
+                    max_price = float(row[0] or 0.0)
+            except Exception:
+                max_price = 0.0
+        max_price = max(0.0, float(max_price))
+
+        placeholders = ",".join("?" for _ in allowed_buckets)
+        sql = f"""
+            SELECT
+                SUM(CASE WHEN LOWER(COALESCE(pm.status,''))='for_sale' THEN 1 ELSE 0 END) AS listed_total,
+                SUM(CASE WHEN LOWER(COALESCE(pm.status,''))='for_sale' THEN 0 ELSE 1 END) AS unlisted_total,
+                COUNT(*) AS aligned_total,
+                SUM(CASE WHEN ? > 0 AND COALESCE(pm.listed_price, pm.current_valuation, ps.initial_value) <= ? THEN 1 ELSE 0 END) AS affordable_total,
+                SUM(CASE WHEN ? > 0 AND LOWER(COALESCE(pm.status,''))='for_sale' AND COALESCE(pm.listed_price, pm.current_valuation, ps.initial_value) <= ? THEN 1 ELSE 0 END) AS affordable_listed,
+                SUM(CASE WHEN ? > 0 AND LOWER(COALESCE(pm.status,''))!='for_sale' AND COALESCE(pm.listed_price, pm.current_valuation, ps.initial_value) <= ? THEN 1 ELSE 0 END) AS affordable_unlisted
+            FROM properties_market pm
+            JOIN properties_static ps ON ps.property_id = pm.property_id
+            JOIN profiled_market_property_buckets ppb ON ppb.property_id = pm.property_id
+            WHERE pm.owner_id > 0
+              AND pm.owner_id != ?
+              AND ppb.bucket_id IN ({placeholders})
+        """
+        params: List[Any] = [
+            float(max_price),
+            float(max_price),
+            float(max_price),
+            float(max_price),
+            float(max_price),
+            float(max_price),
+            int(buyer_id),
+        ] + [str(x) for x in sorted(allowed_buckets)]
+        try:
+            cursor.execute(sql, tuple(params))
+            row = cursor.fetchone() or (0, 0, 0, 0, 0, 0)
+            listed_total, unlisted_total, aligned_total, aff_total, aff_listed, aff_unlisted = row
+        except Exception:
+            listed_total = unlisted_total = aligned_total = 0
+            aff_total = aff_listed = aff_unlisted = 0
+
+        return {
+            "mode": "hard_bucket",
+            "blocked": False,
+            "blocked_reason": "",
+            "buyer_bucket": buyer_bucket,
+            "allowed_property_buckets": sorted(str(x) for x in allowed_buckets),
+            "buyer_max_price": float(max_price),
+            "aligned_total": int(aligned_total or 0),
+            "listed_total": int(listed_total or 0),
+            "unlisted_total": int(unlisted_total or 0),
+            "affordable_total": int(aff_total or 0),
+            "affordable_listed": int(aff_listed or 0),
+            "affordable_unlisted": int(aff_unlisted or 0),
+        }
+
+    @staticmethod
+    def _derive_no_buy_classification(
+        *,
+        selected_ids: List[int],
+        no_selection_code: str,
+        match_ctx: Dict[str, Any],
+        supply_audit: Dict[str, Any],
+    ) -> Tuple[str, str]:
+        """
+        Returns (no_buy_class, no_buy_branch).
+
+        no_buy_class:
+          - HAS_SELECTION
+          - MECHANISM_BLOCKED
+          - CHOOSE_TO_WAIT
+          - NO_SUITABLE_LISTED
+
+        no_buy_branch (only meaningful when NO_SUITABLE_LISTED):
+          - HAS_UNLISTED_SUITABLE
+          - NO_SUITABLE_EXISTS
+          - UNKNOWN
+        """
+        if selected_ids:
+            return "HAS_SELECTION", ""
+        if bool(supply_audit.get("blocked", False)):
+            return "MECHANISM_BLOCKED", str(supply_audit.get("blocked_reason", "") or "")
+        if str(no_selection_code or "").upper() in {"LLM_STOP_THIS_MONTH", "LLM_STOP_SIGNALLED"} or bool(
+            match_ctx.get("stop_search_this_month", False)
+        ):
+            return "CHOOSE_TO_WAIT", str(no_selection_code or "")
+
+        affordable_total = int(supply_audit.get("affordable_total", 0) or 0)
+        affordable_unlisted = int(supply_audit.get("affordable_unlisted", 0) or 0)
+        if affordable_unlisted > 0:
+            return "NO_SUITABLE_LISTED", "HAS_UNLISTED_SUITABLE"
+        if affordable_total <= 0:
+            return "NO_SUITABLE_LISTED", "NO_SUITABLE_EXISTS"
+        return "NO_SUITABLE_LISTED", "UNKNOWN"
+
     def _build_buyer_match_summary_log(
         self,
         *,
@@ -4077,6 +4926,7 @@ class TransactionService:
             "strategy_profile": strategy_profile,
             "selected_property_ids": [int(pid) for pid in (selected_ids or []) if pid is not None],
             "no_selection_reason_code": no_selection_code if not selected_ids else "HAS_SELECTION",
+            "source_match_llm_called": bool(match_ctx.get("llm_called", True)),
             "listings_for_buyer_count": int(listings_for_buyer_count),
             "shortlist_property_ids": [int(pid) for pid in (shortlist_ids or []) if pid is not None],
             "shortlist_count": int(len(shortlist_ids or [])),
@@ -4101,6 +4951,16 @@ class TransactionService:
             "factor_contract": match_ctx.get("factor_contract", {}),
             "bucket_plan": match_ctx.get("bucket_plan", {}),
             "bucket_distribution": match_ctx.get("bucket_distribution", {}),
+            "no_buy_class": match_ctx.get("no_buy_class", ""),
+            "no_buy_branch": match_ctx.get("no_buy_branch", ""),
+            "supply_audit_mode": match_ctx.get("supply_audit_mode", ""),
+            "supply_audit_blocked_reason": match_ctx.get("supply_audit_blocked_reason", ""),
+            "aligned_supply_total": match_ctx.get("aligned_supply_total", 0),
+            "aligned_supply_listed": match_ctx.get("aligned_supply_listed", 0),
+            "aligned_supply_unlisted": match_ctx.get("aligned_supply_unlisted", 0),
+            "aligned_supply_affordable_total": match_ctx.get("aligned_supply_affordable_total", 0),
+            "aligned_supply_affordable_listed": match_ctx.get("aligned_supply_affordable_listed", 0),
+            "aligned_supply_affordable_unlisted": match_ctx.get("aligned_supply_affordable_unlisted", 0),
             "pipeline_stage_trace": pipeline_stage_trace or [],
             "pipeline_order_violation": bool(pipeline_order_violation),
             "market_trend_global": market_trend,
@@ -4110,6 +4970,7 @@ class TransactionService:
         }
         metrics = {
             **(weight_payload or {}),
+            "source_match_llm_called": bool(match_ctx.get("llm_called", True)),
             "shortlist_count": int(len(shortlist_ids or [])),
             "listings_for_buyer_count": int(listings_for_buyer_count),
             "candidate_quota_blocked_count": int(len(quota_blocked_ids or [])),
@@ -4122,6 +4983,16 @@ class TransactionService:
             "factor_contract": match_ctx.get("factor_contract", {}),
             "bucket_plan": match_ctx.get("bucket_plan", {}),
             "bucket_distribution": match_ctx.get("bucket_distribution", {}),
+            "no_buy_class": match_ctx.get("no_buy_class", ""),
+            "no_buy_branch": match_ctx.get("no_buy_branch", ""),
+            "supply_audit_mode": match_ctx.get("supply_audit_mode", ""),
+            "supply_audit_blocked_reason": match_ctx.get("supply_audit_blocked_reason", ""),
+            "aligned_supply_total": match_ctx.get("aligned_supply_total", 0),
+            "aligned_supply_listed": match_ctx.get("aligned_supply_listed", 0),
+            "aligned_supply_unlisted": match_ctx.get("aligned_supply_unlisted", 0),
+            "aligned_supply_affordable_total": match_ctx.get("aligned_supply_affordable_total", 0),
+            "aligned_supply_affordable_listed": match_ctx.get("aligned_supply_affordable_listed", 0),
+            "aligned_supply_affordable_unlisted": match_ctx.get("aligned_supply_affordable_unlisted", 0),
             "pipeline_stage_trace": pipeline_stage_trace or [],
             "pipeline_order_violation": bool(pipeline_order_violation),
             "market_trend_global": market_trend,
@@ -4137,7 +5008,7 @@ class TransactionService:
             str(reason),
             json.dumps(thought, ensure_ascii=False),
             json.dumps(metrics, ensure_ascii=False),
-            bool(match_ctx.get("llm_called", True)),
+            False,
         )
 
     def _register_buyer_failure(self, cursor, buyer: Agent, month: int, reason: str):
@@ -4965,10 +5836,12 @@ class TransactionService:
                 new_prop['owner_id'] = buyer.id
                 new_prop['status'] = 'off_market'
                 new_prop['last_transaction_price'] = agreed_price
+                new_prop['acquired_month'] = int(month)
                 buyer.owned_properties.append(new_prop)
                 prop_data['owner_id'] = buyer.id
                 prop_data['status'] = 'off_market'
                 prop_data['last_transaction_price'] = agreed_price
+                prop_data['acquired_month'] = int(month)
                 tx_record = {
                     "price": agreed_price,
                     "down_payment": down_payment,
@@ -4995,6 +5868,7 @@ class TransactionService:
                     # gate above; execution should not apply a second,
                     # differently-scoped affordability rule to the same order.
                     skip_affordability_check=True,
+                    transaction_month=int(month),
                 )
 
             if not tx_record:
@@ -5086,14 +5960,28 @@ class TransactionService:
                         neg_rounds,
                     ),
                 )
-            cursor.execute(
-                """
-                UPDATE properties_market
-                SET status='off_market', owner_id=?, last_transaction_month=?, current_valuation=?
-                WHERE property_id=?
-                """,
-                (buyer.id, month, tx_record["price"], pid),
-            )
+            try:
+                cursor.execute(
+                    """
+                    UPDATE properties_market
+                    SET status='off_market',
+                        owner_id=?,
+                        last_transaction_month=?,
+                        current_valuation=?,
+                        acquired_month=?
+                    WHERE property_id=?
+                    """,
+                    (buyer.id, month, tx_record["price"], month, pid),
+                )
+            except sqlite3.OperationalError:
+                cursor.execute(
+                    """
+                    UPDATE properties_market
+                    SET status='off_market', owner_id=?, last_transaction_month=?, current_valuation=?
+                    WHERE property_id=?
+                    """,
+                    (buyer.id, month, tx_record["price"], pid),
+                )
             self._sync_buyer_finance(cursor, buyer)
             self._close_order(
                 cursor, month, order_id, buyer, "filled", "Settlement completed", release_amount=0.0, penalty_amount=0.0
@@ -5367,6 +6255,7 @@ class TransactionService:
                     "demand_context": demand_context,
                     "cold_signal": cold_signal,
                     "is_cold_listing": bool((cold_signal or {}).get("is_cold", False)),
+                    "is_fake_hot_listing": bool((demand_heat or {}).get("fake_hot_historical", False)),
                 }
             )
 
@@ -5540,6 +6429,8 @@ class TransactionService:
                 ctx = dict(item.get("ctx", {}) or {})
                 llm_uplift_key_set.add((int(ctx.get("seller_id", 0)), int(ctx.get("pid", 0))))
 
+        fake_hot_raise_block_enabled = bool(cfg.get("fake_hot_block_raise_enabled", True))
+
         for ctx in listing_contexts:
             pid = int(ctx["pid"])
             seller_id = int(ctx["seller_id"])
@@ -5557,6 +6448,7 @@ class TransactionService:
             demand_context = dict(ctx["demand_context"])
             cold_signal = dict(ctx["cold_signal"])
             is_cold_listing = bool(ctx["is_cold_listing"])
+            is_fake_hot_listing = bool(ctx.get("is_fake_hot_listing", False))
             heat_band = str(demand_heat.get("band", "LOW")).upper()
             heat_score = float(demand_heat.get("score", 0.0) or 0.0)
             zero_valid_bid_streak = int(demand_heat.get("trailing_zero_valid_bid_streak", 0) or 0)
@@ -5595,6 +6487,7 @@ class TransactionService:
                 regime_raise_release_enabled
                 and heat_band in {"HIGH", "MEDIUM", "MED"}
                 and has_competition_evidence
+                and not (fake_hot_raise_block_enabled and is_fake_hot_listing)
                 and (
                     zero_valid_bid_streak_block_months <= 0
                     or zero_valid_bid_streak < zero_valid_bid_streak_block_months
@@ -5641,6 +6534,7 @@ class TransactionService:
                         "demand_heat": demand_heat,
                         "demand_context": demand_context,
                         "cold_signal": cold_signal,
+                        "is_fake_hot_listing": bool(is_fake_hot_listing),
                         "heat_band": heat_band,
                         "heat_score": heat_score,
                         "heat_rank": _heat_rank(heat_band),
@@ -5675,6 +6569,7 @@ class TransactionService:
                     and bool(cfg.get("regime_v1_raise_force_rule_path_enabled", False))
                     and str(heat_band).upper() in {"MEDIUM", "MED", "HIGH"}
                     and not bool(is_cold_listing)
+                    and not (fake_hot_raise_block_enabled and is_fake_hot_listing)
                     and has_competition_evidence
                     and (
                         zero_valid_bid_streak_block_months <= 0
@@ -5759,6 +6654,10 @@ class TransactionService:
                 and bool(cfg.get("regime_v1_raise_force_rule_path_enabled", False))
                 and str(item.get("heat_band", "")).upper() in {"MEDIUM", "MED", "HIGH"}
                 and not bool((item.get("cold_signal", {}) or {}).get("is_cold", False))
+                and not (
+                    bool(cfg.get("fake_hot_block_raise_enabled", True))
+                    and bool(item.get("is_fake_hot_listing", False))
+                )
                 and (
                     int((item.get("demand_heat", {}) or {}).get("valid_bids", 0) or 0) >= 1
                     or int((item.get("demand_heat", {}) or {}).get("outbid_losses", 0) or 0) >= 1
@@ -5887,7 +6786,7 @@ class TransactionService:
             demand_ctx_now = dict((metrics or {}).get("recent_demand_context") or {})
             valid_bids_now = int(demand_ctx_now.get("valid_bids", 0) or 0)
             negotiations_now = int(demand_ctx_now.get("negotiation_entries", 0) or 0)
-            matches_now = int(demand_ctx_now.get("matches", 0) or 0)
+            commitment_buyers_now = int(demand_ctx_now.get("commitment_buyers", 0) or 0)
             outbid_now = int(demand_ctx_now.get("outbid_losses", 0) or 0)
             zero_valid_bid_streak_now = int(demand_ctx_now.get("trailing_zero_valid_bid_streak", 0) or 0)
             zero_valid_bid_streak_block_months = int(
@@ -5899,7 +6798,7 @@ class TransactionService:
             severe_cold = (
                 valid_bids_now == 0
                 and negotiations_now == 0
-                and matches_now <= 1
+                and commitment_buyers_now <= 0
                 and int(max(0, listing_duration)) >= 3
             )
             if action == "D" and severe_cold:
@@ -5918,6 +6817,13 @@ class TransactionService:
             # under continuous zero valid bids or no competition evidence, disallow E/F.
             # This keeps "hot listings can raise, cold listings should not raise".
             if action in {"E", "F"}:
+                if bool(cfg.get("fake_hot_block_raise_enabled", True)) and bool(demand_ctx_now.get("fake_hot_historical", False)):
+                    action = "A"
+                    result["coefficient"] = 1.0
+                    result["new_price"] = float(row[2] or 0.0)
+                    result["reason"] = (
+                        f"{result.get('reason', '')} | 假热房禁止触发热盘提价，系统回退到维持价格。"
+                    ).strip(" |")
                 zero_streak_blocked = (
                     zero_valid_bid_streak_block_months > 0
                     and zero_valid_bid_streak_now >= zero_valid_bid_streak_block_months
@@ -6230,9 +7136,11 @@ class TransactionService:
                     downtrend_monthly_buys[int(r[0])] = int(r[1] or 0)
         shortlist_ctrl = self._resolve_candidate_shortlist_controls(cursor, month)
         history_pressure_map = self._build_candidate_history_pressure_map(cursor, month, active_listings)
+        candidate_heat_meta_map = self._build_candidate_heat_meta_map(cursor, month, active_listings)
         # Track in-month shortlist congestion to reduce same-house crowding in later buyers.
         monthly_candidate_pressure: Dict[int, float] = {}
         monthly_candidate_quota_used: Dict[int, int] = {}
+        monthly_candidate_commitment: Dict[int, int] = {}
         candidate_quota_cfg = self._resolve_candidate_quota_controls()
         candidate_two_stage_cfg = self._resolve_two_stage_candidate_controls()
         try:
@@ -6283,6 +7191,9 @@ class TransactionService:
             for pid, p in monthly_candidate_pressure.items():
                 combined_pressure[int(pid)] = float(combined_pressure.get(int(pid), 0.0)) + float(p or 0.0)
             setattr(buyer, "_candidate_pressure_map", combined_pressure)
+            setattr(buyer, "_candidate_heat_meta_map", candidate_heat_meta_map)
+            setattr(buyer, "_candidate_monthly_quota_used_map", dict(monthly_candidate_quota_used))
+            setattr(buyer, "_candidate_monthly_commitment_map", dict(monthly_candidate_commitment))
             observed_ctx = self._resolve_observed_market_trend(cursor, month, buyer, market_trend)
             observed_trend = str(observed_ctx.get("observed_trend", market_trend))
             observed_delay = int(observed_ctx.get("delay_months", 0))
@@ -6362,28 +7273,38 @@ class TransactionService:
                 # Let matcher persist/reuse cross-month traversal memory.
                 setattr(buyer, "_current_matching_month", int(month))
                 blocked_reflow_ids = set(int(x) for x in (getattr(buyer, "_reflow_blocked_property_ids", set()) or set()) if x is not None)
-                listings_for_buyer = []
-                for li in active_listings:
-                    try:
-                        li_owner = int(li.get("owner_id", li.get("seller_id", -1)) or -1)
-                    except Exception:
-                        li_owner = -1
-                    if li_owner == int(getattr(buyer, "id", -1)):
-                        continue
-                    listings_for_buyer.append(li)
+                same_month_seen_ids = self._load_buyer_seen_property_ids(
+                    cursor=cursor,
+                    buyer_id=int(getattr(buyer, "id", -1) or -1),
+                    through_month=int(month),
+                )
+                setattr(
+                    buyer,
+                    "_same_month_seen_property_ids",
+                    sorted(int(x) for x in same_month_seen_ids),
+                )
+                listings_for_buyer, live_filter_stats = self._filter_live_candidate_listings(
+                    cursor=cursor,
+                    buyer_id=int(getattr(buyer, "id", -1) or -1),
+                    listings=list(active_listings or []),
+                    same_month_seen_ids=same_month_seen_ids,
+                )
+                if any(int(live_filter_stats.get(key, 0) or 0) > 0 for key in ("removed_locked", "removed_not_for_sale", "removed_same_month_seen")):
+                    self._append_order_log(
+                        month,
+                        "LIVE_CANDIDATE_FILTER",
+                        {
+                            "buyer_id": int(getattr(buyer, "id", -1)),
+                            **{k: int(v or 0) for k, v in live_filter_stats.items()},
+                        },
+                    )
                 if blocked_reflow_ids:
                     filtered_rows = []
-                    for li in active_listings:
+                    for li in listings_for_buyer:
                         try:
                             pid_i = int(li.get("property_id"))
                         except Exception:
                             pid_i = None
-                        try:
-                            li_owner = int(li.get("owner_id", li.get("seller_id", -1)) or -1)
-                        except Exception:
-                            li_owner = -1
-                        if li_owner == int(getattr(buyer, "id", -1)):
-                            continue
                         if pid_i is None or pid_i in blocked_reflow_ids:
                             continue
                         filtered_rows.append(li)
@@ -6698,6 +7619,26 @@ class TransactionService:
                 retry_trace=retry_trace,
                 retry_budget=retry_budget,
             )
+            if not selected_ids:
+                supply_audit = self._audit_supply_visibility_for_buyer(cursor, buyer=buyer)
+                augmented = dict(match_ctx)
+                augmented["supply_audit_mode"] = str(supply_audit.get("mode", "") or "")
+                augmented["supply_audit_blocked_reason"] = str(supply_audit.get("blocked_reason", "") or "")
+                augmented["aligned_supply_total"] = int(supply_audit.get("aligned_total", 0) or 0)
+                augmented["aligned_supply_listed"] = int(supply_audit.get("listed_total", 0) or 0)
+                augmented["aligned_supply_unlisted"] = int(supply_audit.get("unlisted_total", 0) or 0)
+                augmented["aligned_supply_affordable_total"] = int(supply_audit.get("affordable_total", 0) or 0)
+                augmented["aligned_supply_affordable_listed"] = int(supply_audit.get("affordable_listed", 0) or 0)
+                augmented["aligned_supply_affordable_unlisted"] = int(supply_audit.get("affordable_unlisted", 0) or 0)
+                no_buy_class, no_buy_branch = self._derive_no_buy_classification(
+                    selected_ids=selected_ids,
+                    no_selection_code=str(no_selection_code or ""),
+                    match_ctx=augmented,
+                    supply_audit=supply_audit,
+                )
+                augmented["no_buy_class"] = str(no_buy_class or "")
+                augmented["no_buy_branch"] = str(no_buy_branch or "")
+                match_ctx = augmented
             # Cross-month sticky search state:
             # buyers keep searching next month unless they matched this month or truly exhausted.
             search_exhausted = bool(retry_budget.get("search_exhausted_this_month", False))
@@ -6858,6 +7799,7 @@ class TransactionService:
                         ipid = None
                     if ipid is not None:
                         monthly_candidate_pressure[ipid] = float(monthly_candidate_pressure.get(ipid, 0.0)) + float(selected_interest_weight)
+                        monthly_candidate_commitment[ipid] = int(monthly_candidate_commitment.get(ipid, 0) or 0) + 1
 
         if batch_match_logs:
             cursor.executemany(
@@ -7062,8 +8004,24 @@ class TransactionService:
                 listing = next((item for item in active_listings if item['property_id'] == pid), None)
                 if not listing:
                     continue
+                listing_for_session = dict(listing)
+                listing_heat_meta = dict(candidate_heat_meta_map.get(int(pid), {}) or {})
+                listing_for_session["_recent_match_count"] = int(listing_heat_meta.get("recent_match_count", 0) or 0)
+                listing_for_session["_recent_exposure_count"] = int(listing_heat_meta.get("recent_exposure_count", listing_heat_meta.get("recent_match_count", 0)) or 0)
+                listing_for_session["_recent_commitment_count"] = int(listing_heat_meta.get("recent_commitment_count", 0) or 0)
+                listing_for_session["_recent_competition_count"] = int(listing_heat_meta.get("recent_competition_count", 0) or 0)
+                listing_for_session["_recent_negotiation_count"] = int(listing_heat_meta.get("recent_negotiation_count", 0) or 0)
+                listing_for_session["_recent_transaction_count"] = int(listing_heat_meta.get("recent_transaction_count", 0) or 0)
+                listing_for_session["_hot_listing_score"] = float(
+                    listing_heat_meta.get("real_competition_score", listing_heat_meta.get("hot_listing_score", 0.0)) or 0.0
+                )
+                listing_for_session["_real_competition_score"] = float(
+                    listing_heat_meta.get("real_competition_score", listing_heat_meta.get("hot_listing_score", 0.0)) or 0.0
+                )
+                listing_for_session["_fake_hot_historical"] = bool(listing_heat_meta.get("fake_hot_historical", False))
+                listing_for_session["_current_interest_count"] = int(len(interested_entries))
 
-                seller_id = int(listing.get('seller_id', listing.get('owner_id', -1)) or -1)
+                seller_id = int(listing_for_session.get('seller_id', listing_for_session.get('owner_id', -1)) or -1)
                 ranked_entries = self._sort_classic_buyers(cursor, month, listing, interested_entries)
                 # Safety net: strip any accidental self-trade entries that may come from legacy rows.
                 if seller_id >= 0:
@@ -7096,13 +8054,13 @@ class TransactionService:
                 # ✅ V3: 开发商房产规则判定（跳过LLM谈判）
                 if seller_id == -1:
                     # 开发商房产：使用规则判定
-                    tasks.append(developer_quick_sale_async(interested_entries, listing))
+                    tasks.append(developer_quick_sale_async(interested_entries, listing_for_session))
                     session_metadata.append({
                         "pid": pid,
                         "seller": None,  # 开发商无需Agent对象
                         "buyers": interested_buyers,
                         "order_entries": ranked_entries,
-                        "listing": listing
+                        "listing": listing_for_session
                     })
                     continue  # 跳过普通谈判逻辑
 
@@ -7116,13 +8074,13 @@ class TransactionService:
                 # mode = decide_negotiation_format(seller_agent, interested_buyers, market_hint)
 
                 # ✅ Phase 3.3: Pass db_conn to enable bid recording
-                tasks.append(run_negotiation_session_async(seller_agent, interested_buyers, listing, market, month, self.config, self.conn))
+                tasks.append(run_negotiation_session_async(seller_agent, interested_buyers, listing_for_session, market, month, self.config, self.conn))
                 session_metadata.append({
                     "pid": pid,
                     "seller": seller_agent,
                     "buyers": interested_buyers,
                     "order_entries": ranked_entries,
-                    "listing": listing
+                    "listing": listing_for_session
                 })
 
             if tasks:
@@ -7309,10 +8267,11 @@ class TransactionService:
                         {
                             "negotiation_route_model": route_model,
                             "negotiation_gray_score": float(route_gray),
+                            "source_negotiation_llm_calls_present": True,
                         },
                         ensure_ascii=False,
                     ),
-                    True,
+                    False,
                 ))
                 if m16_clamp_count > 0:
                     batch_m16_logs.append((
@@ -7620,6 +8579,13 @@ class TransactionService:
                                 need_school = bool(getattr(getattr(b, "preference", None), "need_school_district", False))
                                 hard_need = motive in {"starter_entry", "starter_home", "education_driven", "chain_replacement"} or need_school
                                 if hard_need and str(refined_outbid_reason or "").lower().startswith("outbid"):
+                                    self._set_buyer_substitute_spillover_context(
+                                        b,
+                                        listing=listing,
+                                        prop=props_map.get(int(pid), {}) or {},
+                                        month=int(month),
+                                        competition_strength=int(len(order_entries)),
+                                    )
                                     reflow_outbid_candidate_ids.add(int(b.id))
                                     blocked_set = reflow_blocked_property_map.setdefault(int(b.id), set())
                                     blocked_set.add(int(pid))
@@ -7635,6 +8601,8 @@ class TransactionService:
                             downtrend_monthly_buys[int(winner.id)] = int(downtrend_monthly_buys.get(int(winner.id), 0)) + 1
                         setattr(winner, "_must_continue_search", False)
                         setattr(winner, "_search_exhausted", False)
+                        setattr(winner, "substitute_spillover_context", {})
+                        setattr(winner, "substitute_spillover_month", -1)
                         self._register_buyer_success(cursor, winner.id, month=month)
                         self._register_seller_chain_progress(cursor, actual_seller_id)
                         batch_negotiations.append(
@@ -8001,6 +8969,14 @@ class TransactionService:
                             "attempted_size": int(len(attempted_ids)),
                             "ranked_backup_ids": [int(item["property_id"]) for item in ranked_backup_candidates[:6]],
                             "fresh_refill_ids": [int(item["property_id"]) for item in refill_candidates[:6]],
+                            "spillover_source_property_id": int(
+                                ((getattr(buyer_obj, "substitute_spillover_context", {}) or {}).get("source_property_id", -1) or -1)
+                            ),
+                            "spillover_priority_ids": [
+                                int(item.get("property_id", -1) or -1)
+                                for item in prioritized_candidates[:6]
+                                if float(item.get("spillover_bonus", 0.0) or 0.0) > 0.0
+                            ],
                         },
                     )
                     for promoted_pid in preferred_ids[:2]:
@@ -8120,11 +9096,19 @@ class TransactionService:
                         delattr(b, "_reflow_blocked_property_ids")
                     except Exception:
                         pass
+                if hasattr(b, "substitute_spillover_context"):
+                    setattr(b, "substitute_spillover_context", {})
+                if hasattr(b, "substitute_spillover_month"):
+                    setattr(b, "substitute_spillover_month", -1)
             for b in agent_map.values():
                 if hasattr(b, "_recovery_queue_mode"):
                     setattr(b, "_recovery_queue_mode", False)
                 if hasattr(b, "_recovery_round"):
                     setattr(b, "_recovery_round", 0)
+                if hasattr(b, "substitute_spillover_context"):
+                    setattr(b, "substitute_spillover_context", {})
+                if hasattr(b, "substitute_spillover_month"):
+                    setattr(b, "substitute_spillover_month", -1)
 
         # Process settlements due this month after negotiations/reflow are recorded.
         # Skip settlement inside reflow pass; outer pass will settle once.

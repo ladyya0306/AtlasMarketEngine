@@ -18,6 +18,16 @@ import yaml
 
 from config.agent_tiers import AGENT_TIER_CONFIG
 from config.config_loader import SimulationConfig
+from real_estate_demo_v2_1 import (
+    _choose_experiment_mode,
+    _choose_profile_pack,
+    _derive_agent_count_from_supply,
+    _estimate_listing_rate,
+    _scale_role_defaults,
+    apply_scholar_release_config,
+    build_scaled_profile_pack_from_snapshot,
+    load_release_supply_snapshot_options,
+)
 from simulation_runner import SimulationRunner
 
 
@@ -51,6 +61,10 @@ class StartupZoneConfig(BaseModel):
 
 
 class StartupOverrides(BaseModel):
+    use_release_supply_controls: Optional[bool] = None
+    fixed_supply_snapshot_id: Optional[str] = None
+    market_goal: Optional[str] = None
+    demand_multiplier: Optional[float] = Field(default=None, ge=0.1, le=2.0)
     property_count: Optional[int] = Field(default=None, ge=1)
     agent_tiers: Optional[List[StartupTierConfig]] = None
     zones: Optional[List[StartupZoneConfig]] = None
@@ -139,11 +153,11 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "simulation.months",
-        "label": "Simulation Months",
+            "label": "Simulation Rounds (virtual cycles)",
         "type": "integer",
         "group": "simulation",
         "editable_phase": "startup_only",
-        "description": "Total number of months to simulate.",
+            "description": "Total number of virtual market rounds to simulate.",
         "min": 1,
         "max": 240,
         "step": 1,
@@ -196,7 +210,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "enum",
         "group": "macro",
         "editable_phase": "between_steps",
-        "description": "Override monthly macro schedule with a fixed market sentiment.",
+        "description": "Override the round-based macro schedule with a fixed market sentiment.",
         "options": ["", "optimistic", "stable", "pessimistic"],
     },
     {
@@ -261,7 +275,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "number",
         "group": "market_dynamics",
         "editable_phase": "startup_only",
-        "description": "Base monthly activation probability before funnel routing.",
+        "description": "Base per-round activation probability before funnel routing.",
         "min": 0.0,
         "max": 1.0,
         "step": 0.001,
@@ -294,7 +308,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "integer",
         "group": "agents",
         "editable_phase": "startup_only",
-        "description": "Upper bound on smart-agent buy orders per month.",
+        "description": "Upper bound on smart-agent buy orders per round.",
         "min": 0,
         "max": 20,
         "step": 1,
@@ -334,7 +348,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "number",
         "group": "simulation",
         "editable_phase": "readonly",
-        "description": "Baseline monthly savings rate used when seeding agent cash flow.",
+        "description": "Baseline per-round savings rate used when seeding agent cash flow.",
         "min": 0.0,
         "max": 1.0,
         "step": 0.01,
@@ -356,7 +370,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "boolean",
         "group": "simulation",
         "editable_phase": "readonly",
-        "description": "Whether the legacy month-end CLI intervention panel is enabled.",
+            "description": "Whether the round-end CLI intervention panel is enabled.",
     },
     {
         "key": "simulation.base_year",
@@ -390,7 +404,7 @@ CONFIG_SCHEMA_FIELDS = [
         "type": "number",
         "group": "market_dynamics",
         "editable_phase": "readonly",
-        "description": "Three-month price decline threshold that triggers panic sell logic.",
+        "description": "Three-round price decline threshold that triggers panic sell logic.",
         "min": -1.0,
         "max": 0.0,
         "step": 0.01,
@@ -437,7 +451,7 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "decision_factors.buyer_timeout_months",
-        "label": "Buyer Timeout Months",
+        "label": "Buyer Timeout Rounds",
         "type": "integer",
         "group": "market_dynamics",
         "editable_phase": "readonly",
@@ -446,7 +460,7 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "decision_factors.listing_stale_months",
-        "label": "Listing Stale Months",
+        "label": "Listing Stale Rounds",
         "type": "integer",
         "group": "market_dynamics",
         "editable_phase": "readonly",
@@ -466,11 +480,11 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "life_events.monthly_event_trigger_prob",
-        "label": "Life Event Trigger Probability",
+        "label": "Life Event Trigger Probability Per Round",
         "type": "number",
         "group": "life_events",
         "editable_phase": "readonly",
-        "description": "Monthly probability of triggering a life event before optional LLM reasoning.",
+        "description": "Per-round probability of triggering a life event before optional LLM reasoning.",
         "min": 0.0,
         "max": 1.0,
         "step": 0.01,
@@ -538,11 +552,11 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "system.llm.max_calls_per_month",
-        "label": "LLM Max Calls Per Month",
+        "label": "LLM Max Calls Per Round",
         "type": "integer",
         "group": "system",
         "editable_phase": "readonly",
-        "description": "Monthly LLM budget ceiling used by the simulation runtime.",
+        "description": "Per-round LLM budget ceiling used by the simulation runtime.",
         "step": 1,
     },
     {
@@ -599,11 +613,11 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "smart_agent.max_sells_per_month",
-        "label": "Smart Agent Max Sells",
+        "label": "Smart Agent Max Sells Per Round",
         "type": "integer",
         "group": "agents",
         "editable_phase": "readonly",
-        "description": "Upper bound on smart-agent sell orders per month.",
+        "description": "Upper bound on smart-agent sell orders per round.",
         "step": 1,
     },
     {
@@ -681,7 +695,7 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "market_pulse.seed_loan_age_min_months",
-        "label": "Seed Loan Age Min Months",
+        "label": "Seed Loan Age Min Periods",
         "type": "integer",
         "group": "pulse",
         "editable_phase": "readonly",
@@ -690,7 +704,7 @@ CONFIG_SCHEMA_FIELDS = [
     },
     {
         "key": "market_pulse.seed_loan_age_max_months",
-        "label": "Seed Loan Age Max Months",
+        "label": "Seed Loan Age Max Periods",
         "type": "integer",
         "group": "pulse",
         "editable_phase": "readonly",
@@ -851,17 +865,146 @@ class SimulationRuntime:
         }
         return mapping.get(key, key)
 
-    def _apply_startup_overrides(self, config: SimulationConfig, overrides: Optional[StartupOverrides]) -> Dict[str, Any]:
+    def _apply_release_startup_overrides(
+        self,
+        config: SimulationConfig,
+        overrides: StartupOverrides,
+        *,
+        months: int,
+        seed: int,
+        preplanned_interventions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        options = load_release_supply_snapshot_options()
+        if not options:
+            raise HTTPException(status_code=500, detail="Release supply snapshots are not available.")
+        by_id = {item["snapshot_id"]: item for item in options}
+        recommended_snapshot_id = "spindle_medium" if "spindle_medium" in by_id else options[0]["snapshot_id"]
+        snapshot_id = str(overrides.fixed_supply_snapshot_id or recommended_snapshot_id).strip()
+        if snapshot_id not in by_id:
+            raise HTTPException(status_code=400, detail=f"Unsupported fixed_supply_snapshot_id: {snapshot_id}")
+
+        market_goal = str(overrides.market_goal or "balanced").strip().lower() or "balanced"
+        if market_goal not in {"balanced", "buyer_market", "seller_market"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported market_goal: {market_goal}")
+
+        demand_multiplier = float(
+            overrides.demand_multiplier
+            if overrides.demand_multiplier is not None
+            else {"balanced": 1.00, "buyer_market": 0.80, "seller_market": 1.30}[market_goal]
+        )
+        supply_snapshot = dict(by_id[snapshot_id])
+        property_count = int(supply_snapshot.get("total_selected_supply", 0) or 0)
+        requested_agent_count = _derive_agent_count_from_supply(property_count, demand_multiplier)
+        scaled_profile_pack, demand_bucket_plan = build_scaled_profile_pack_from_snapshot(
+            base_profile_pack_path=str(
+                supply_snapshot.get("profile_pack_path") or _choose_profile_pack(market_goal)
+            ),
+            snapshot_payload=dict(supply_snapshot.get("snapshot_payload") or {}),
+            target_agent_total=requested_agent_count,
+        )
+        effective_agent_count = int(
+            demand_bucket_plan.get("effective_agent_count", requested_agent_count) or requested_agent_count
+        )
+        effective_demand_multiplier = float(effective_agent_count) / float(max(1, property_count))
+        role_defaults = _scale_role_defaults(effective_agent_count, market_goal)
+        buyer_quota = max(0, int(role_defaults.get("BUYER", 0) or 0))
+        seller_quota = min(
+            max(0, int(role_defaults.get("SELLER", 0) or 0)),
+            max(0, effective_agent_count - buyer_quota),
+        )
+        buyer_seller_quota = min(
+            max(0, int(role_defaults.get("BUYER_SELLER", 0) or 0)),
+            max(0, effective_agent_count - buyer_quota - seller_quota),
+        )
+        target_r_order_hint = {"balanced": 1.00, "buyer_market": 0.70, "seller_market": 1.30}[market_goal]
+        listing_plan = _estimate_listing_rate(
+            property_count=property_count,
+            buyer_quota=buyer_quota,
+            buyer_seller_quota=buyer_seller_quota,
+            target_r_order_hint=target_r_order_hint,
+        )
+        scholar_inputs = {
+            "market_goal": market_goal,
+            "months": int(months),
+            "agent_count": int(effective_agent_count),
+            "property_count": int(property_count),
+            "demand_multiplier": float(demand_multiplier),
+            "effective_demand_multiplier": float(effective_demand_multiplier),
+            "supply_snapshot": supply_snapshot,
+            "profile_pack_inline": scaled_profile_pack,
+            "demand_bucket_plan": demand_bucket_plan,
+            "buyer_quota": int(buyer_quota),
+            "seller_quota": int(seller_quota),
+            "buyer_seller_quota": int(buyer_seller_quota),
+            "target_r_order_hint": float(target_r_order_hint),
+            "income_multiplier": float(overrides.income_adjustment_rate or 1.0),
+            "force_role_months": min(int(months), 3),
+            "profiled_market_mode": True,
+            "hard_bucket_matcher": True,
+            "enable_intervention_panel": bool(overrides.enable_intervention_panel)
+            if overrides.enable_intervention_panel is not None
+            else False,
+            "open_startup_intervention_menu": False,
+            "profile_pack_path": str(
+                supply_snapshot.get("profile_pack_path") or _choose_profile_pack(market_goal)
+            ),
+            "experiment_mode": str(
+                supply_snapshot.get("experiment_mode") or _choose_experiment_mode(market_goal)
+            ),
+            "listing_plan": listing_plan,
+            "preplanned_interventions": list(preplanned_interventions or []),
+            "seed": int(seed),
+        }
+        apply_scholar_release_config(config, scholar_inputs, start_month=1)
+        return {
+            "release_startup": {
+                "snapshot_id": snapshot_id,
+                "market_goal": market_goal,
+                "requested_demand_multiplier": float(demand_multiplier),
+                "effective_demand_multiplier": float(effective_demand_multiplier),
+                "requested_agent_count": int(requested_agent_count),
+                "effective_agent_count": int(effective_agent_count),
+                "demand_bucket_plan": demand_bucket_plan,
+            },
+            "agent_count": int(effective_agent_count),
+            "property_count": int(property_count),
+        }
+
+    def _apply_startup_overrides(
+        self,
+        config: SimulationConfig,
+        overrides: Optional[StartupOverrides],
+        *,
+        months: int,
+        seed: int,
+        preplanned_interventions: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         if overrides is None:
             return {}
 
         applied: Dict[str, Any] = {}
+        use_release_supply_controls = bool(
+            overrides.use_release_supply_controls
+            or overrides.fixed_supply_snapshot_id
+            or overrides.demand_multiplier is not None
+        )
 
-        if overrides.property_count is not None:
+        if use_release_supply_controls:
+            applied.update(
+                self._apply_release_startup_overrides(
+                    config,
+                    overrides,
+                    months=months,
+                    seed=seed,
+                    preplanned_interventions=preplanned_interventions,
+                )
+            )
+
+        if (not use_release_supply_controls) and overrides.property_count is not None:
             config._config["user_property_count"] = int(overrides.property_count)
             applied["property_count"] = int(overrides.property_count)
 
-        if overrides.agent_tiers:
+        if (not use_release_supply_controls) and overrides.agent_tiers:
             user_agent_config: Dict[str, Dict[str, Any]] = {}
             total_agents = 0
             for tier in overrides.agent_tiers:
@@ -880,7 +1023,7 @@ class SimulationRuntime:
             applied["agent_tiers"] = user_agent_config
             applied["agent_count"] = total_agents
 
-        if overrides.zones:
+        if (not use_release_supply_controls) and overrides.zones:
             zone_payload: Dict[str, Dict[str, float]] = {}
             for zone in overrides.zones:
                 zone_key = str(zone.zone or "").strip().upper()
@@ -972,15 +1115,25 @@ class SimulationRuntime:
             self.night_plan_path = None
 
             config = SimulationConfig(req.config_path)
+            provisional_months = req.months or int(config.get("simulation.months", 12))
+            provisional_seed = req.seed if req.seed is not None else config.get("simulation.random_seed", 42)
+            if provisional_seed is None:
+                provisional_seed = 42
             applied_night_plan = self._apply_night_plan(config, req.night_plan_path if req.night_run else None)
-            applied_startup = self._apply_startup_overrides(config, req.startup_overrides)
+            applied_startup = self._apply_startup_overrides(
+                config,
+                req.startup_overrides,
+                months=int(provisional_months),
+                seed=int(provisional_seed),
+                preplanned_interventions=req.preplanned_interventions,
+            )
             config._config["_applied_startup_overrides"] = applied_startup
             config._config["_applied_night_plan"] = applied_night_plan
+            if req.preplanned_interventions is not None:
+                config.update("simulation.preplanned_interventions", req.preplanned_interventions)
+                config._config["_inline_preplanned_interventions"] = req.preplanned_interventions
             if req.night_run:
                 config.update("simulation.enable_intervention_panel", False)
-                if req.preplanned_interventions is not None:
-                    config.update("simulation.preplanned_interventions", req.preplanned_interventions)
-                    config._config["_inline_preplanned_interventions"] = req.preplanned_interventions
 
             derived_agent_count = applied_startup.get("agent_count")
             agent_count = req.agent_count or derived_agent_count or int(config.get("simulation.agent_count", 50))
@@ -1109,7 +1262,7 @@ class SimulationRuntime:
             if self.runner is None:
                 raise HTTPException(status_code=409, detail="No simulation has been started.")
             if self.runner.status not in {"initialized", "paused"}:
-                raise HTTPException(status_code=409, detail="Controls can only be changed between month steps.")
+                raise HTTPException(status_code=409, detail="Controls can only be changed between round steps.")
             try:
                 controls = self.runner.apply_runtime_controls(
                     down_payment_ratio=req.down_payment_ratio,
@@ -1134,7 +1287,7 @@ class SimulationRuntime:
         if self.runner is None:
             raise HTTPException(status_code=409, detail="No simulation has been started.")
         if self.runner.status not in {"initialized", "paused"}:
-            raise HTTPException(status_code=409, detail="Interventions can only be applied between month steps.")
+            raise HTTPException(status_code=409, detail="Interventions can only be applied between round steps.")
 
     def add_population(self, req: PopulationInterventionRequest):
         with self._lock:
@@ -1405,6 +1558,50 @@ def _build_startup_defaults(config: SimulationConfig):
             },
         ],
         "agent_tiers": tier_defaults,
+        "release_startup": _build_release_startup_defaults(),
+    }
+
+
+def _build_release_startup_defaults():
+    options = load_release_supply_snapshot_options()
+    by_id = {item["snapshot_id"]: item for item in options}
+    recommended_snapshot_id = "spindle_medium" if "spindle_medium" in by_id else (options[0]["snapshot_id"] if options else "")
+    return {
+        "enabled": bool(options),
+        "recommended_snapshot_id": recommended_snapshot_id,
+        "default_market_goal": "balanced",
+        "demand_multiplier_range": {"min": 0.10, "max": 2.00},
+        "default_demand_multiplier_by_goal": {
+            "balanced": 1.00,
+            "buyer_market": 0.80,
+            "seller_market": 1.30,
+        },
+        "default_preplanned_interventions": [
+            {"action_type": "income_shock", "month": 2, "pct_change": -0.10, "target_tier": "all"},
+            {"action_type": "developer_supply", "month": 2, "zone": "A", "count": 3, "template": "mixed_balanced"},
+            {"action_type": "supply_cut", "month": 3, "zone": "A", "count": 2},
+        ],
+        "supply_snapshots": [
+            {
+                "snapshot_id": str(item.get("snapshot_id", "")),
+                "display_name": str(item.get("display_name", "")),
+                "family_label": str(item.get("family_label", "")),
+                "structure_family": str(item.get("structure_family", "")),
+                "recommended_use": str(item.get("recommended_use", "")),
+                "total_selected_supply": int(item.get("total_selected_supply", 0) or 0),
+                "snapshot_status": str(item.get("snapshot_status", "")),
+                "startup_characteristics": str(item.get("startup_characteristics", "")),
+                "speed_tradeoff": str(item.get("speed_tradeoff", "")),
+                "accuracy_tradeoff": str(item.get("accuracy_tradeoff", "")),
+                "minimum_demand_multiplier": float(item.get("minimum_demand_multiplier", 0.0) or 0.0),
+                "demand_bucket_count": int(item.get("demand_bucket_count", 0) or 0),
+                "supply_bucket_count": int(
+                    ((((item.get("snapshot_payload") or {}).get("governance_snapshot") or {}).get("supply_library") or {}).get("bucket_count", 0)
+                    or 0
+                )),
+            }
+            for item in options
+        ],
     }
 
 
@@ -1592,11 +1789,13 @@ def get_status():
 def list_runs():
     results_root = Path("results")
     runs: List[Dict[str, object]] = []
+    seen_db_paths = set()
     if not results_root.exists():
-        return {"runs": runs}
+        results_root.mkdir(parents=True, exist_ok=True)
 
     for db_file in sorted(results_root.glob("run_*/simulation.db"), reverse=True):
         run_dir = db_file.parent
+        seen_db_paths.add(str(db_file.resolve()))
         metadata_path = run_dir / "metadata.json"
         metadata: Dict[str, object] = {}
         if metadata_path.exists():
@@ -1646,6 +1845,37 @@ def list_runs():
                 "can_resume": can_resume,
             }
         )
+
+    current_runner = runtime.runner
+    current_db = getattr(current_runner, "db_path", None)
+    if current_runner is not None and current_db:
+        current_db_path = Path(str(current_db))
+        resolved_current = str(current_db_path.resolve()) if current_db_path.exists() else str(current_db_path)
+        if resolved_current not in seen_db_paths:
+            snapshot = current_runner.get_status()
+            transactions_total = 0
+            try:
+                cur = current_runner.conn.cursor()
+                transactions_total = _q1(cur, "SELECT COUNT(*) FROM transactions")
+            except Exception:
+                transactions_total = 0
+            runs.insert(
+                0,
+                {
+                    "run_id": current_db_path.parent.name,
+                    "run_dir": str(current_db_path.parent).replace("\\", "/"),
+                    "db_path": str(current_db_path).replace("\\", "/"),
+                    "created_at": getattr(current_runner, "started_at", None),
+                    "agent_count": int(getattr(current_runner, "agent_count", 0) or 0),
+                    "months": int(getattr(current_runner, "months", 0) or 0),
+                    "seed": getattr(current_runner, "seed", None),
+                    "status": snapshot.get("status", "unknown"),
+                    "current_month": int(snapshot.get("current_month", 0) or 0),
+                    "completed_months": int(snapshot.get("current_month", 0) or 0),
+                    "transactions_total": int(transactions_total or 0),
+                    "can_resume": bool(snapshot.get("status") in {"initialized", "paused"}),
+                },
+            )
     return {"runs": runs}
 
 
@@ -1687,7 +1917,7 @@ def view_db_observer(db_path: Optional[str] = None):
 
     stats_html = "".join(
         [
-            _card("当前月份", data.get("latest_month", 0)),
+            _card("当前回合（虚拟周期）", data.get("latest_month", 0)),
             _card("Decision Logs", counts.get("decision_logs", 0)),
             _card("Transactions", counts.get("transactions", 0)),
             _card("Orders", counts.get("transaction_orders", 0)),
@@ -1744,6 +1974,10 @@ def view_db_observer(db_path: Optional[str] = None):
           <strong>当前数据库</strong><br>
           Run: {html.escape(str(run.get("run_id") or "-"))} · DB: {html.escape(str(run.get("db_path") or "-"))}
         </div>
+        <section class="card" style="margin-bottom:18px;">
+          <p>{html.escape(_external_db_notice(run.get("db_path") or "-"))}</p>
+          <p class="muted">{html.escape(_external_round_notice())}</p>
+        </section>
         <section class="meta-grid">
           <article class="card">
             <h2>运行元信息</h2>
@@ -1803,6 +2037,14 @@ def _safe_q1(cur, sql: str, params: tuple = ()) -> int:
         return _q1(cur, sql, params)
     except sqlite3.OperationalError:
         return 0
+
+
+def _external_round_notice() -> str:
+    return "本项目对外展示中的“回合”是虚拟市场周期；若个别输出仍出现“月份/month”，也应按回合机制理解。"
+
+
+def _external_db_notice(db_path: Optional[object]) -> str:
+    return f"当前数据库位置：{str(db_path or '-')}"
 
 
 def _read_run_metadata(run_dir: Path) -> Dict[str, object]:
@@ -1971,6 +2213,8 @@ def _write_zero_tx_diagnostics(run_dir: Path, data: Dict[str, object]) -> Dict[s
     md_lines = [
         "# 0成交诊断报告",
         "",
+        f"- {_external_db_notice(run_dir / 'simulation.db')}",
+        f"- {_external_round_notice()}",
         f"- generated_at: `{data['generated_at']}`",
         f"- max_month: `{data['max_month']}`",
         f"- transactions_total: `{data['transactions_total']}`",
@@ -2042,9 +2286,9 @@ def view_zero_tx_forensics(db_path: Optional[str] = None):
         for item in data.get("precheck_reasons", [])[:6]
     ) or "<li>暂无明显阻断原因</li>"
     monthly_html = "".join(
-        f"<tr><td>M{int(item.get('month') or 0)}</td><td>{int(item.get('tx') or 0)}</td><td>{int(item.get('precheck_reject_count') or 0)}</td><td>{int(item.get('invalid_bid_count') or 0)}</td></tr>"
+        f"<tr><td>R{int(item.get('month') or 0)}</td><td>{int(item.get('tx') or 0)}</td><td>{int(item.get('precheck_reject_count') or 0)}</td><td>{int(item.get('invalid_bid_count') or 0)}</td></tr>"
         for item in data.get("monthly_metrics", [])
-    ) or "<tr><td colspan='4'>暂无月度指标</td></tr>"
+    ) or "<tr><td colspan='4'>暂无回合指标</td></tr>"
     return f"""
     <!doctype html>
     <html lang="zh-CN">
@@ -2067,6 +2311,10 @@ def view_zero_tx_forensics(db_path: Optional[str] = None):
       <main>
         <h1>0成交诊断报告</h1>
         <p class="muted">Run: {html.escape(run_dir.name)} · generated_at: {html.escape(str(data.get("generated_at") or "-"))}</p>
+        <section class="card" style="margin-bottom:16px;">
+          <p>{html.escape(_external_db_notice(target_db))}</p>
+          <p class="muted">{html.escape(_external_round_notice())}</p>
+        </section>
         <section class="grid">
           <article class="card"><div class="muted">总成交</div><strong>{int(data.get("transactions_total") or 0)}</strong></article>
           <article class="card"><div class="muted">活跃买家</div><strong>{int(data.get("active_buyers") or 0)}</strong></article>
@@ -2078,9 +2326,9 @@ def view_zero_tx_forensics(db_path: Optional[str] = None):
           <ul>{reasons_html}</ul>
         </section>
         <section class="card" style="margin-top:16px;">
-          <h2>月度指标</h2>
+          <h2>回合指标（虚拟周期）</h2>
           <table>
-            <thead><tr><th>月份</th><th>成交</th><th>预检拒绝</th><th>无效出价</th></tr></thead>
+            <thead><tr><th>回合</th><th>成交</th><th>预检拒绝</th><th>无效出价</th></tr></thead>
             <tbody>{monthly_html}</tbody>
           </table>
         </section>
@@ -2187,10 +2435,14 @@ def view_parameter_assumption_report():
       <main>
         <h1>参数与假设说明表</h1>
         <p class="muted">这份说明表由系统根据当前 run 自动生成，用于记录启动参数、关键假设和本轮结果摘要。</p>
+        <section class="card">
+          <p>{html.escape(_external_db_notice(experiment.get('db_path') or '-'))}</p>
+          <p class="muted">{html.escape(_external_round_notice())}</p>
+        </section>
         <section class="grid">
           <article class="card"><div class="muted">Run ID</div><strong>{html.escape(str(experiment.get('run_id') or '-'))}</strong></article>
           <article class="card"><div class="muted">Agent 数量</div><strong>{html.escape(str(experiment.get('agent_count') or '-'))}</strong></article>
-          <article class="card"><div class="muted">模拟月数</div><strong>{html.escape(str(experiment.get('months') or '-'))}</strong></article>
+          <article class="card"><div class="muted">模拟回合数（虚拟周期）</div><strong>{html.escape(str(experiment.get('months') or '-'))}</strong></article>
           <article class="card"><div class="muted">随机种子</div><strong>{html.escape(str(experiment.get('seed') or '-'))}</strong></article>
         </section>
         <section class="card">
@@ -2224,6 +2476,7 @@ def view_final_report():
 
     report = runtime.runner.get_export_report()
     run = report.get("run", {})
+    public_notes = report.get("public_notes", {}) or {}
     runtime_controls = report.get("runtime_controls", {})
     last_month_summary = report.get("last_month_summary", {}) or {}
     final_summary = report.get("final_summary", {})
@@ -2339,7 +2592,7 @@ def view_final_report():
         fail_values = [item["failures"] for item in chart_points]
         rate_values = [item["success_rate"] for item in chart_points]
         chart_svg = f"""
-        <svg class="report-chart" viewBox="0 0 {chart_width} {chart_height}" role="img" aria-label="Monthly market chart">
+        <svg class="report-chart" viewBox="0 0 {chart_width} {chart_height}" role="img" aria-label="Round market chart">
           <line class="grid-line" x1="0" y1="188" x2="{chart_width}" y2="188"></line>
           <line class="grid-line" x1="0" y1="132" x2="{chart_width}" y2="132"></line>
           <line class="grid-line" x1="0" y1="76" x2="{chart_width}" y2="76"></line>
@@ -2354,7 +2607,7 @@ def view_final_report():
         f"""
         <article class="card month-card">
           <div class="month-head">
-            <h3>Month {item.get('month', '-')}</h3>
+            <h3>Round {item.get('month', '-')}</h3>
             <span class="month-pill">{int(item.get('transactions', 0) or 0)} deals</span>
           </div>
           <p>Avg Transaction Price: ¥{float(item.get('avg_transaction_price', 0) or 0):,.0f}</p>
@@ -2367,15 +2620,15 @@ def view_final_report():
         </article>
         """
         for item in month_reviews
-    ) or '<article class="card"><p>No month reviews available.</p></article>'
+    ) or '<article class="card"><p>No round reviews available.</p></article>'
     preset_timeline = "".join(
-        f"<li>Month {entry.get('month', 0)} · {html.escape(str(entry.get('payload', {}).get('preset', 'unknown')))}</li>"
+        f"<li>Round {entry.get('month', 0)} · {html.escape(str(entry.get('payload', {}).get('preset', 'unknown')))}</li>"
         for entry in preset_entries
     ) or "<li>No scenario preset applied.</li>"
     preset_impact_cards = "".join(
         f"""
         <article class="mini-card">
-          <strong>Month {int(entry.get('month', 0) or 0)} · {html.escape(str(entry.get('payload', {}).get('preset', 'unknown')))}</strong>
+          <strong>Round {int(entry.get('month', 0) or 0)} · {html.escape(str(entry.get('payload', {}).get('preset', 'unknown')))}</strong>
           <p>{html.escape(str(entry.get('message') or 'Scenario preset applied.'))}</p>
         </article>
         """
@@ -2384,7 +2637,7 @@ def view_final_report():
     controls_timeline = "".join(
         f"""
         <article class="mini-card">
-          <strong>Month {int(entry.get('month', 0) or 0)} · {html.escape(str(entry.get('event_type') or 'CONTROL_EVENT'))}</strong>
+          <strong>Round {int(entry.get('month', 0) or 0)} · {html.escape(str(entry.get('event_type') or 'CONTROL_EVENT'))}</strong>
           <p>{html.escape(str(entry.get('message') or 'Control state updated.'))}</p>
         </article>
         """
@@ -2540,13 +2793,15 @@ def view_final_report():
       <main class="page">
         <section class="hero">
           <h1>Simulation Final Report</h1>
-          <p class="muted">Run {html.escape(str(run.get('run_id', '-')))} · Status {html.escape(str(run.get('status', '-')))} · Completed Month {run.get('completed_month', 0)}</p>
+          <p class="muted">Run {html.escape(str(run.get('run_id', '-')))} · Status {html.escape(str(run.get('status', '-')))} · Completed Round {run.get('completed_month', 0)}</p>
+          <p>{html.escape(_external_db_notice(public_notes.get('db_path') or run.get('db_path') or '-'))}</p>
+          <p class="muted">{html.escape(str(public_notes.get('round_interpretation') or _external_round_notice()))}</p>
         </section>
         <section class="grid">
           <article class="card">
             <h2>Run Snapshot</h2>
             <p>Agent Count: {run.get('agent_count', 0)}</p>
-            <p>Total Months: {run.get('total_months', 0)}</p>
+            <p>Total Rounds: {run.get('total_months', 0)}</p>
             <p>Started: {html.escape(str(run.get('started_at', '-')))}</p>
             <p>Completed: {html.escape(str(run.get('completed_at', '-')))}</p>
           </article>
@@ -2556,7 +2811,7 @@ def view_final_report():
             <p>Key Properties: {len(final_summary.get('key_properties', []))}</p>
             <p>Failure Reasons: {len(final_summary.get('failure_reasons', []))}</p>
             <p>Interventions: {len(final_summary.get('interventions', []))}</p>
-            <div class="metric">{len(month_reviews)} months reviewed</div>
+            <div class="metric">{len(month_reviews)} rounds reviewed</div>
           </article>
           <article class="card">
             <h2>Preset Timeline</h2>
@@ -2579,7 +2834,7 @@ def view_final_report():
           </article>
         </section>
         <section class="card">
-          <h2>Monthly Market Chart</h2>
+          <h2>Round Market Chart</h2>
           {chart_svg or '<p class="muted">No chart data available.</p>'}
           <div class="legend">
             <span class="tx">Transactions</span>
@@ -2616,7 +2871,7 @@ def view_final_report():
           </article>
         </section>
         <section>
-          <h2>Month Reviews</h2>
+          <h2>Round Reviews</h2>
           <div class="grid">{month_cards}</div>
         </section>
       </main>

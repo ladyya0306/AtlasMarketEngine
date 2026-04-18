@@ -25,10 +25,34 @@ def _safe_range(raw: Any) -> Tuple[float, float]:
     return 0.0, 0.0
 
 
+def _supply_bucket_price_range(s_bucket: Dict[str, Any]) -> Tuple[float, float]:
+    if not isinstance(s_bucket, dict):
+        return 0.0, 0.0
+    direct = _safe_range(s_bucket.get("price_range"))
+    if direct != (0.0, 0.0):
+        return direct
+    market_profile = s_bucket.get("market_profile", {}) or {}
+    if isinstance(market_profile, dict):
+        nested = _safe_range(market_profile.get("price_range"))
+        if nested != (0.0, 0.0):
+            return nested
+    return 0.0, 0.0
+
+
 def _range_overlap(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     left = max(a[0], b[0])
     right = min(a[1], b[1])
     return max(0.0, right - left)
+
+
+def _buyer_budget_ceiling(buyer_max_price_range: Tuple[float, float]) -> float:
+    return float(buyer_max_price_range[1] or 0.0)
+
+
+def _affordable_any_supply(buyer_max_price_range: Tuple[float, float], supply_price_range: Tuple[float, float]) -> bool:
+    supply_low = float(supply_price_range[0] or 0.0)
+    buyer_ceiling = _buyer_budget_ceiling(buyer_max_price_range)
+    return buyer_ceiling > 0.0 and supply_low <= buyer_ceiling
 
 
 def load_profile_pack(path: Path) -> Dict[str, Any]:
@@ -72,18 +96,20 @@ def validate_profile_pack(pack: Dict[str, Any]) -> Dict[str, Any]:
 
         max_price_range = _safe_range((demand_bucket.get("budget_profile", {}) or {}).get("max_price_range"))
         overlap_total = 0.0
+        affordable_any_positive = False
         supply_ranges = []
         abundant_supply = 0
         scarce_supply = 0
         for sbid in eligible:
             s_bucket = supply.get(sbid, {}) or {}
-            s_range = _safe_range(s_bucket.get("price_range"))
+            s_range = _supply_bucket_price_range(s_bucket)
             supply_ranges.append({"bucket_id": sbid, "price_range": [s_range[0], s_range[1]]})
             overlap_total += _range_overlap(max_price_range, s_range)
+            affordable_any_positive = affordable_any_positive or _affordable_any_supply(max_price_range, s_range)
             by_mode = s_bucket.get("count_by_supply_mode", {}) or {}
             abundant_supply += int(by_mode.get("abundant", 0) or 0)
             scarce_supply += int(by_mode.get("scarce", 0) or 0)
-        budget_ok = overlap_total > 0.0
+        budget_ok = affordable_any_positive
         if not budget_ok:
             errors.append(f"budget_mismatch:{demand_bucket_id}")
         budget_coverage[demand_bucket_id] = {
@@ -91,6 +117,7 @@ def validate_profile_pack(pack: Dict[str, Any]) -> Dict[str, Any]:
             "buyer_max_price_range": [max_price_range[0], max_price_range[1]],
             "eligible_supply_ranges": supply_ranges,
             "budget_overlap_positive": budget_ok,
+            "target_overlap_width": round(float(overlap_total), 2),
         }
 
         if abundant_supply <= 0:

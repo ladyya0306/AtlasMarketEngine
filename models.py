@@ -89,6 +89,13 @@ class Agent:
         self.agent_type = "normal"
         self.info_delay_months = 0
         self.monthly_event = None  # To store current month's event
+        self.current_life_event = None
+        self.timing_role = ""
+        self.decision_urgency = ""
+        self.lifecycle_labels: List[str] = []
+        self.lifecycle_summary = ""
+        self.substitute_spillover_context = {}
+        self.substitute_spillover_month = -1
         self.mortgage_monthly_payment = 0.0  # Monthly mortgage payment commitment
         self.total_debt = 0.0  # Total mortgage debt
         # Runtime finance snapshots used by hard-constraint checks.

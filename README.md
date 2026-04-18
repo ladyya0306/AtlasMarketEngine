@@ -1,21 +1,6 @@
 # AtlasMarketEngine
 
-**A public research release for interpretable housing-market simulation**
-
-[中文](#中文说明) | [English](#english)
-
-AtlasMarketEngine is a public-facing research engine for housing-market simulation. It is built to answer a practical question:
-
-**Can we reproduce understandable market states, explain why they happened, and let a human operator intervene without turning the system into a black box?**
-
-This repository focuses on that release goal. It is not the full internal commercial stack, and it is not a generic “AI real estate demo.” It is a runnable research release with a clear transaction chain, visible assumptions, and reproducible entrypoints.
-
-> Important sync note:
-> This public repository is **not yet fully aligned** with the latest private working branch.
-> In particular, the latest release-only startup path built around fixed supply snapshots, demand multipliers, and fully externalized “round” wording has not been fully merged here yet.
-> If you see legacy `month/months` wording in runtime output, interpret it as the public branch's compatibility vocabulary rather than a statement about real calendar months.
-
-![Atlas onepager](./assets/atlas_onepager.svg)
+> A reproducible housing market simulation engine with fixed supply snapshots, demand-side scaling, real negotiation loops, round-end intervention controls, and public clone verification.
 
 ---
 
@@ -23,252 +8,186 @@ This repository focuses on that release goal. It is not the full internal commer
 
 ### 这个项目是什么
 
-AtlasMarketEngine 是一个住房市场推演引擎。
+`AtlasMarketEngine` 是一个可运行、可复现、可解释的住房市场推演系统。
 
-它的目标不是用一堆随机参数“编一个故事”，而是把下面几件事放到同一条可复查链上：
+它不是只生成几条随机成交记录，而是把一个完整市场周期里的关键动作串起来：
 
-1. 谁在进场，谁在观望
-2. 买家看到了什么房子，为什么选它
-3. 卖家如何挂牌、调价、接受或拒绝
-4. 谈判、出价、多人竞价、成交和失败是怎么发生的
-5. 当市场后半段开始变薄时，系统和玩家分别能做什么
+1. 居民财务变化
+2. 谁在这一轮真正进场
+3. 卖家如何挂牌、如何调价
+4. 买家看到什么、怎么选房、怎么谈价
+5. 哪些交易真的成交，哪些失败
+6. 一轮结束后，玩家是否要补供、减供、强制挂牌
 
-一句话说，它是一个：
+这里统一使用“回合（Round）”而不是“自然月”。
 
-**可运行、可解释、可干预、可复查的住房市场推演系统。**
+原因是：系统里的 1 个回合包含一整轮市场结算、挂牌、看房、谈判、成交和归档流程，更接近“完整市场周期”，而不是现实日历月。
 
-> 同步状态说明：
-> 这个公开仓当前**还没有完全追平**最新的内部工作分支。
-> 尤其是“固定供应盘 + 需求倍率 + 自动冲击”的最新发布入口，以及对外全面改成“回合”的展示链，当前公开仓还没有全部合并。
-> 所以如果你在公开仓运行时仍看到 `month/months` 或“月份”，应理解为旧公开口径下的兼容表达，不应直接当成现实自然月。
+### 这个项目为什么存在
 
-### 为什么要做这个项目
+这个项目想回答的不是“房价会不会涨”这么单一的问题，而是：
 
-现实中的住房市场很难只用一个数字讲清楚。
+- 固定供给底座下，市场能否自然跑起来
+- 热度到底是真的竞争，还是只是看起来热
+- 为什么后半段容易出现“有人想买，但没房可买”
+- 玩家在回合末补供、减供、强制挂牌，到底能改变什么
+- 不同供给结构、不同需求强度、不同冲击条件下，市场形状会怎么变化
 
-同样是“卖方市场”，可能会出现两种完全不同的形状：
+### 这个项目现在能做什么
 
-1. 热点房源真的被多人竞价抬高
-2. 平均总价没有明显上涨，因为成交结构下沉到了更多低总价主流盘
+- 支持固定供应盘启动
+  - 梭子型样本
+  - 金字塔型样本
+- 支持需求倍率控制
+  - `0.10x - 2.00x`
+- 自动保证两件事
+  - 每类买家画像不会被压到消失
+  - 每类供应画像仍有对应买家覆盖
+- 支持真实模型驱动的买卖选择与谈判
+- 支持回合末人工干预面板
+  - 定向增供
+  - 自动补供
+  - 全量补充
+  - 减供
+  - 强制挂牌
+- 支持 CLI、Web、数据库、报告、checkpoint 和断点续跑
 
-同样是“成交变少”，也可能是三种完全不同的原因：
-
-1. 自然出清，流动性好的房子先卖完了
-2. 需求没有消失，但对口在售房变少了
-3. 系统把“被很多人看见”误判成“真的有人抢”
-
-这个项目就是为了解开这些混在一起的因素，让研究者、产品经理、金融从业者或政策讨论者，可以更具体地看市场链条。
-
-### 它解决什么问题
-
-这个项目当前重点解决四类问题：
-
-1. **假热和真竞争的区分**
-   - 不是“看的人多”就等于“抢的人多”
-2. **买卖双方决策链的可解释性**
-   - 进场、选房、谈判、失败都有上下文
-3. **固定供给下的后半段市场形状**
-   - 为什么会变薄，哪里会先断，哪些桶位还在支撑成交
-4. **人类可干预的市场实验**
-   - 不是把系统全自动放养，而是在回合末给出可解释面板，让人决定是否补供、减供或强制挂牌
-
-### 项目机制怎么理解
-
-#### 1. LLM 负责“想做什么”，代码负责“能不能做”
-
-```mermaid
-flowchart TD
-    A["LLM decision layer<br/>想买 / 想卖 / 观望<br/>选哪套房 / 出什么价 / 接不接受"] --> B["Code rule layer<br/>资金校验 / 流程控制 / 交割 / 状态更新"]
-    B --> C["Database & reports<br/>数据库 / 日志 / 回合摘要 / 结果文件"]
-```
-
-这里最重要的边界是：
-
-1. LLM 决定意愿和选择
-2. 代码只做约束、验证和落盘
-
-也就是说，代码不会偷偷替买家决定“你这个月必须买房”，也不会偷偷替卖家决定“你必须卖”。
-
-#### 2. 性能为什么能撑住
-
-系统不是让 LLM 对每个人、每套房、每一步都全量思考。
-
-它走的是一个漏斗式流程：
+### 核心机制
 
 ```mermaid
 flowchart LR
-    A["快速预筛<br/>SQL / 规则过滤"] --> B["批量角色判定<br/>谁本回合值得进入市场"] --> C["个体详细决策<br/>选房 / 谈判 / 竞价 / 成交"]
+    A["固定供应盘<br/>梭子型 / 金字塔型"] --> B["需求倍率<br/>0.10x - 2.00x"]
+    B --> C["候选人预筛选<br/>代码层"]
+    C --> D["角色与时点判断<br/>LLM"]
+    D --> E["挂牌 / 选房 / 谈判<br/>LLM + 规则层"]
+    E --> F["成交 / 失败 / 市场更新<br/>代码规则层"]
+    F --> G["回合末复盘面板"]
+    G --> H["玩家决策<br/>补供 / 减供 / 强制挂牌"]
+    H --> I["下一回合"]
 ```
 
-这样做的好处是：
+#### 1. 假热与真竞争分离
 
-1. 大量不需要进场的人不会浪费模型调用
-2. 真正需要精细判断的地方，LLM 才会深入参与
-3. 运行速度、成本和解释性三者能平衡
+- 只是曝光高，不会自动抬价
+- 只有出现真实多人竞争时，才会进入更强竞价和拍卖升级
 
-### 当前公开版重点保留了哪些机制
+#### 2. 激活结构拆分
 
-1. 共享交易主链
-2. 买方 / 卖方 / 平衡市场三类方向测试
-3. 持续状态，不是每回合从零开始
-4. 多人竞价和被挤出逻辑
-5. 派生证据输出
-6. Scholar CLI 入口
-7. 本地 smoke test 和 GitHub Actions 自检链
+系统不再把“长期有需求”和“本回合真的形成买压”混成一团，而是分成：
 
-### 当前公开版没有保留什么
+- 这回合该不该进场
+- 如果进场，是立即买、立即卖、先卖后买，还是继续观望
+- 进场以后，看见什么、怎么处理、何时行动
 
-1. 更完整的内部原始证据库
-2. 更深的治理参数包
-3. 更复杂的商业化行业适配层
-4. 全部内部研究支线材料
+#### 3. `smart / normal` 只做行为修饰
 
-所以这不是“完整商业交付版”，而是：
+生命周期和时点角色是主驱动，`smart / normal` 只修饰：
 
-**一个适合公开说明、公开运行、公开建立可信度的 Research Release。**
+- 信息可见性
+- 信息处理方式
+- 行动时点
+- 行为稳定性
 
-### 图形理解：它大概长什么样
+#### 4. 回合末人工干预
 
-#### 验证概览图
+系统会在市场明显变薄时暂停，让玩家基于复盘做供给决策，而不是默认全自动补货。
 
-![Validation matrix](./assets/market_validation_matrix.svg)
+### 运行结果说明
 
-#### CLI 展示图
+当前公开仓只保留“衍生证据”，不公开内部原始运行数据库和完整原始日志包。
 
-![CLI showcase](./assets/cli_showcase.svg)
+最关键的公开结论是：
 
-### 当前已经看到的结果形状
+- 不加外部调节，市场也能完整跑完 6 回合
+- 加入供给调节后，总成交不一定更高，但后半段“有买家却没房可买”的情况会明显减少
+- `seller_market` 的卖方强势是真实发生的，但主要集中在局部热点房源上
+- 即使 `seller_market` 更偏卖方，平均总成交价也不一定更高，因为成交结构会下沉到更多低总价主流盘
 
-基于当前公开版保留的证据，可以先读出几条稳定结论：
+卖方市场这条最容易被误解，所以我们单独保留了证据附录：
 
-1. 系统可以稳定拉开三类市场形状：
-   - 平衡市场
-   - 买方市场
-   - 卖方市场
-2. 卖方市场并不等于“所有房子一起暴涨”
-   - 更真实的形状是：局部热点房源真的被竞价抬高
-   - 但整条样本的平均总成交价，可能因为低总价主流盘成交更多，而没有同步拉高
-3. 后半段成交减少，不一定代表系统失真
-   - 也可能是固定供给市场自然出清后的薄市化
-4. 供给干预的价值，不只是堆高总成交
-   - 更重要的是缓和“有人想买，但没对口在售房”的后半段错位
+- `/docs/卖方市场局部竞价证据_20260418.md`
 
-### 运行结果应该怎么看
+里面写清楚了：
 
-当前公开版建议同时看三类结果：
+- 证据来自哪个数据库
+- 用到哪几张表
+- 哪几套房发生了多人竞价
+- 原挂牌价是多少
+- 最终成交价是多少
+- 几个人参与了竞价
 
-1. **成交量**
-   - 看市场有没有真正跑起来
-2. **成交价相对挂牌价**
-   - 看议价位置更偏向谁
-3. **竞价失败和找不到房的次数**
-   - 看市场是因为太冷、太挤，还是结构错位
+### 性能与可运行性
 
-### 运行性能应该怎么理解
+系统采用“代码预筛选 + LLM 精准决策”的漏斗式结构，避免把所有人都直接丢给模型。
 
-这个项目的性能，不应该只看“跑一轮花了几分钟”，还要看“为什么能在可解释前提下跑完”。
+粗略流程是：
 
-可以把当前公开版的性能理解成三层：
+1. 代码先做大规模预筛
+2. 模型只判断更小范围候选人本回合角色
+3. 只有真正激活的人，才进入选房、挂牌和谈判
 
-1. **本地最小 smoke**
-   - 目标：验证克隆后能不能跑
-   - 方法：强制 mock 模式，1 回合，小样本
-2. **演示彩排**
-   - 目标：验证真实模型下，入口和结果链能不能对外展示
-   - 真实样例：`3` 回合演示样本约 `11.2` 分钟跑完
-3. **正式长测**
-   - 目标：比较不同市场方向和结构敏感性
-   - 用来证明机制是否稳定，不是给第一次克隆的人当入门用例
+这让系统能把调用量控制在可接受范围，而不是每回合对所有人逐个问模型。
 
-### 别人下载后怎么确认“真的能跑”
-
-这是现在最重要的工程问题之一。
-
-当前推荐两种方法：
-
-#### 方法 A：本地最小自检
+公开仓同时内置了 clone 可运行自检：
 
 ```bash
 pip install -r requirements.txt
 python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
 ```
 
-这条命令会：
+这条 smoke 的目标不是验证研究结论，而是验证：
 
-1. 强制使用 mock 模式，不依赖真实模型 API
-2. 跑一个最小样本
-3. 自动生成：
-   - `public_smoke_report.json`
-   - `public_smoke_report.md`
+- 仓库能启动
+- 能跑完至少 1 回合
+- 能写数据库
+- 能写报告
 
-它回答的不是“市场机制够不够真实”，而是：
+### 图形化理解
 
-**这个仓库被别人 clone 下来以后，能不能启动、能不能跑一轮、能不能写数据库和结果文件。**
+```mermaid
+flowchart TD
+    A["需求进入系统"] --> B["是否形成本回合有效买压"]
+    B -->|否| C["继续观望"]
+    B -->|是| D["进入市场"]
+    D --> E["看到候选房源"]
+    E --> F["选房 / 挂牌 / 谈判"]
+    F --> G["成交或失败"]
+    G --> H["回合复盘"]
+    H --> I["玩家可干预供给"]
+    I --> J["进入下一回合"]
+```
 
-#### 方法 B：看 GitHub Actions
+### 可能应用场景
 
-这个仓库已经加入 `public-smoke` workflow。
+- 房地产市场结构研究
+- 住房政策和供给策略讨论
+- 交互式演示和教学
+- 多主体谈判与市场机制实验
+- LLM 在社会模拟中的边界和解释性研究
 
-只要推送到 GitHub，Actions 就会自动做：
+### 公开仓发布政策
 
-1. 安装依赖
-2. 运行最小 smoke
-3. 上传 smoke 报告 artifact
+本仓采用 **只公开衍生证据（Derived Evidence Only）** 的发布政策：
 
-也就是说，别人不一定要先相信 README，可以先看自动化检查是不是绿的。
+- 不公开内部原始运行数据库
+- 不公开完整原始日志包
+- 不公开原始实验大包
+- 只公开：
+  - 汇总结果
+  - 通俗总结
+  - 说明文档
+  - 操作手册
+  - 讲解材料
+  - 关键样例证据
+  - clone 后最小可运行自检
 
-### 当前公开仓和最新工作分支还差什么
+### 建议阅读顺序
 
-为了避免误解，这里明确写清楚：
-
-1. 公开仓当前已经具备：
-   - 可运行主链
-   - 公开证据摘要
-   - Scholar CLI 入口
-   - clone 后最小 smoke test
-   - GitHub Actions 自动自检
-2. 公开仓当前**还没有完整追平**的部分包括：
-   - 固定供应盘发布入口
-   - `0.10x - 2.00x` 的需求倍率发布链
-   - 梭子型 / 金字塔型公开切换入口
-   - 对外全链路“回合”口径
-
-这意味着：
-
-**AtlasMarketEngine 现在已经适合公开说明、公开 clone、自检和基础演示，但还不能被表述成“已经与最新内部发布分支完全同步”。**
-
-### 推荐先读什么
-
-如果你只有 5 分钟，按这个顺序：
-
-1. [公开证据摘要](./evidence/market_validation_summary_public.md)
-2. [发布目录索引](./docs/发布目录索引.md)
-3. [Scholar CLI 复现实验说明](./docs/Scholar_CLI_复现实验说明_20260412.md)
-4. [主入口](./real_estate_demo_v2_1.py)
-
-### 可能的应用场景
-
-1. 住房市场机制研究
-2. 金融机构的按揭与供需错位讨论
-3. 城市住房产品结构比较
-4. 房地产产品经理或研究员的演示样机
-5. 需要“能讲清楚为什么这样成交”的 AI 经济模拟演示
-
-### 公开版边界
-
-这个仓库是公开研究版，不是完整商业版。
-
-所以它更适合回答：
-
-1. 这个系统到底在做什么
-2. 它为什么值得继续看
-3. 它能不能跑
-4. 它能不能解释市场状态
-
-而不是直接回答：
-
-1. 现实世界未来几个月一定会怎样
-2. 某个城市的真实价格预测是什么
+1. `/docs/中国住房市场推演发布收口摘要_20260418_通俗版.md`
+2. `/docs/发布说明_20260418.md`
+3. `/docs/发布证据包索引_20260418.md`
+4. `/docs/卖方市场局部竞价证据_20260418.md`
+5. `/docs/发布操作手册_20260418.md`
 
 ---
 
@@ -276,275 +195,159 @@ python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
 
 ### What this project is
 
-AtlasMarketEngine is a housing-market simulation engine.
+`AtlasMarketEngine` is a reproducible and interpretable housing market simulation engine.
 
-It is not trying to produce a “cool AI story” with random parameters. Instead, it keeps the full chain visible:
+It does not just print random transactions. It models an entire market cycle:
 
-1. who enters the market and who stays out
-2. what buyers see and why they choose a property
-3. how sellers list, reprice, accept, or refuse
-4. how negotiation, outbids, and transactions actually happen
-5. what humans can do when the late-stage market becomes thin
+1. household finance updates
+2. who actually enters the market in this round
+3. listing and repricing behavior
+4. buyer visibility, property selection, and negotiation
+5. which transactions close and which fail
+6. whether the player injects supply, cuts supply, or forces listings at round end
 
-In one sentence:
+We use the word **Round** instead of **Month** in public-facing materials.
 
-**It is a runnable, explainable, intervenable, and inspectable housing-market simulation system.**
+That is intentional: one round in this project represents a full market cycle, not a real calendar month.
 
 ### Why this project exists
 
-Real housing markets are hard to explain with one number.
+This engine is built to answer questions like:
 
-A “seller market” can mean very different things:
+- Can a housing market keep moving under a fixed supply base?
+- Is observed heat real competition, or only superficial attention?
+- Why do late rounds often become thinner even when buyers still exist?
+- What does round-end supply intervention actually change?
+- How does market shape change under different supply structures, demand pressure, or shocks?
 
-1. some hotspot properties are genuinely pushed up by multi-bid competition
-2. the overall average transaction price does not rise much because more low-priced mainstream units are being sold
+### What it currently supports
 
-Likewise, “fewer transactions” can come from very different reasons:
+- Fixed supply startup packs
+  - spindle-shaped inventories
+  - pyramid-shaped inventories
+- Demand multiplier control
+  - `0.10x - 2.00x`
+- Automatic coverage guarantees
+  - no buyer persona bucket disappears
+  - every supply bucket still has matching buyer coverage
+- LLM-driven decisions for intent, property choice, and negotiation
+- Round-end intervention panel
+  - targeted supply injection
+  - automatic supply supplement
+  - full replenishment
+  - supply cut
+  - forced listing
+- CLI, Web, database output, reports, checkpoints, and resume
 
-1. natural inventory depletion
-2. buyers still exist, but matching active listings are missing
-3. the system mistakes visibility heat for real competition
-
-This project exists to separate those forces and make them discussable.
-
-### What problem it solves
-
-The current public release focuses on four problems:
-
-1. **Separating fake heat from real competition**
-2. **Making buyer and seller decisions explainable**
-3. **Understanding late-stage market thinning under fixed supply**
-4. **Allowing human intervention without turning the system into a black box**
-
-### How to think about the mechanism
-
-#### 1. The LLM decides intent; code enforces rules
-
-```mermaid
-flowchart TD
-    A["LLM decision layer<br/>buy / sell / wait<br/>pick property / bid / accept or refuse"] --> B["Code rule layer<br/>affordability / process control / settlement / state updates"]
-    B --> C["Database & reports<br/>database / logs / round summary / exported artifacts"]
-```
-
-The key boundary is:
-
-1. the LLM chooses intent and behavior
-2. code validates, constrains, and records
-
-#### 2. Why the performance is manageable
-
-The system does not ask the model to think deeply about every agent at every step.
-
-It uses a funnel:
+### Core mechanics
 
 ```mermaid
 flowchart LR
-    A["Fast prefilter<br/>SQL / rule screening"] --> B["Batched role routing<br/>who should enter this round"] --> C["Detailed individual decisions<br/>property choice / negotiation / auction / settlement"]
+    A["Fixed supply snapshot"] --> B["Demand multiplier"]
+    B --> C["Code pre-filter"]
+    C --> D["LLM role and timing decision"]
+    D --> E["Listing / matching / negotiation"]
+    E --> F["Settlement and market update"]
+    F --> G["Round-end review panel"]
+    G --> H["Player supply decision"]
+    H --> I["Next round"]
 ```
 
-This is what keeps the release practical:
+### Key findings
 
-1. non-participants do not consume expensive calls
-2. detailed LLM reasoning is reserved for actual market actors
-3. speed, cost, and interpretability stay in balance
+- The market can complete a 6-round run even without external intervention.
+- Supply intervention does not necessarily maximize total transaction count.
+- Its main value is reducing late-round mismatch: buyers still exist, but fewer of them end up with “no suitable active listing”.
+- In `seller_market`, local bidding pressure is real, but concentrated in hotspot properties rather than uniformly raising every price.
+- The average transaction price may stay below expectations even in a seller-leaning market because the sales mix can shift downward into more mainstream, lower-priced inventory.
 
-### What this public release keeps
+### Performance and reproducibility
 
-1. the shared transaction chain
-2. balanced / buyer / seller market direction tests
-3. persistent state across rounds
-4. multi-bid and outbid logic
-5. derived public evidence
-6. the Scholar CLI entrypoint
-7. a local smoke test and GitHub Actions verification path
+The engine uses a funnel:
 
-### What this public release does not keep
+1. code pre-filters large candidate pools
+2. LLMs evaluate role and timing on a much smaller set
+3. only activated participants enter full listing, matching, and negotiation loops
 
-1. the full internal raw evidence archive
-2. deeper governance parameter packs
-3. richer commercial scenario layers
-4. every internal research branch
-
-So this is not the full commercial product. It is a:
-
-**public research release that is clear enough to explain and solid enough to run.**
-
-### Visual overview
-
-#### Validation overview
-
-![Validation matrix](./assets/market_validation_matrix.svg)
-
-#### CLI overview
-
-![CLI showcase](./assets/cli_showcase.svg)
-
-### What the current results already show
-
-The public evidence supports several stable conclusions:
-
-1. the engine can separate balanced, buyer, and seller market shapes
-2. a seller market does **not** necessarily mean every property goes up together
-3. lower late-stage volume does **not** automatically mean the model is broken
-4. supply-side intervention is valuable mainly because it reduces late-stage mismatch, not because it simply maximizes transaction count
-
-### How to read the results
-
-The most useful output signals are:
-
-1. **transaction volume**
-2. **transaction-to-list ratio**
-3. **outbid counts and “no active listing” counts**
-
-That combination helps distinguish:
-
-1. a cold market
-2. a crowded seller-leaning market
-3. a structurally mismatched market
-
-### How to think about runtime performance
-
-Do not read performance only as “how many minutes does one run take.”
-
-There are three practical layers:
-
-1. **local clone verification**
-   - goal: prove the repo boots after clone
-   - method: mock mode, one round, tiny sample
-2. **demo rehearsal**
-   - goal: prove the public path works with live models
-   - real example: a 3-round demo run completed in about `11.2` minutes
-3. **release comparison runs**
-   - goal: validate market-shape stability, not provide first-run onboarding
-
-### How to test whether a fresh clone actually works
-
-This matters a lot for a public repository.
-
-There are two recommended methods:
-
-#### Method A: local smoke test
-
-```bash
-pip install -r requirements.txt
-python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
-```
-
-This command:
-
-1. forces mock mode
-2. runs a minimal sample
-3. writes:
-   - `public_smoke_report.json`
-   - `public_smoke_report.md`
-
-It is not a realism check. It answers a simpler question:
-
-**Can someone clone this repo, boot it, run one round, and get a database plus output files?**
-
-#### Method B: GitHub Actions
-
-This repo ships with a `public-smoke` workflow.
-
-On push or pull request, it will:
-
-1. install dependencies
-2. run the same minimal smoke test
-3. upload the smoke report artifact
-
-So people do not need to trust the README blindly. They can inspect the automated check status.
-
-### What is still not fully synced to the latest working branch
-
-To avoid overclaiming, this public repo currently includes:
-
-1. the runnable public core
-2. the public evidence layer
-3. the Scholar CLI path
-4. a clone verification smoke test
-5. GitHub Actions smoke validation
-
-But it does **not yet fully expose** the newest release branch features such as:
-
-1. the fixed-supply startup flow
-2. the `0.10x - 2.00x` demand-multiplier release path
-3. public spindle/pyramid snapshot switching
-4. fully externalized “round” terminology across the entire user-visible chain
-
-So the right description today is:
-
-**AtlasMarketEngine is already suitable for public explanation, cloning, basic verification, and research demos, but it is not yet a one-to-one mirror of the latest private release branch.**
-
-### What to read first
-
-If you only have five minutes:
-
-1. [Public evidence summary](./evidence/market_validation_summary_public.md)
-2. [Repository map](./docs/发布目录索引.md)
-3. [Scholar CLI reproduction guide](./docs/Scholar_CLI_复现实验说明_20260412.md)
-4. [Main entrypoint](./real_estate_demo_v2_1.py)
-
-### Possible application scenarios
-
-1. housing-market mechanism research
-2. mortgage and supply-mismatch discussion in finance
-3. comparing supply structures in urban housing products
-4. explainable real-estate simulation demos
-5. AI economy demos where transaction logic must be inspectable
-
-### Release boundary
-
-This is a public research release, not a full commercial product.
-
-It is best used to answer:
-
-1. what the system does
-2. why it matters
-3. whether it runs
-4. whether it can explain market states
-
-It is **not** meant to claim:
-
-1. direct real-world price prediction
-2. city-specific short-term forecasting
-
----
-
-## Quick start
-
-```bash
-pip install -r requirements.txt
-python real_estate_demo_v2_1.py
-```
-
-Main entrypoint:
-
-- [real_estate_demo_v2_1.py](./real_estate_demo_v2_1.py)
+This keeps the system far more efficient than naively sending every agent into the LLM pipeline every round.
 
 Public clone verification:
 
 ```bash
+pip install -r requirements.txt
+python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
+```
+
+This smoke test answers a practical question:
+
+> Can a fresh clone boot, run, write a database, and complete a minimal round?
+
+It is not meant to prove research-grade market realism by itself.
+
+### Public release policy
+
+This repository follows a **Derived Evidence Only** policy:
+
+- no raw internal run databases
+- no full raw log bundles
+- no full private experiment packs
+- only:
+  - summaries
+  - public-facing evidence notes
+  - release docs
+  - operation manual
+  - presentation materials
+  - selected evidence samples
+  - runnable public smoke verification
+
+### Recommended reading order
+
+1. `/docs/中国住房市场推演发布收口摘要_20260418_通俗版.md`
+2. `/docs/发布说明_20260418.md`
+3. `/docs/发布证据包索引_20260418.md`
+4. `/docs/卖方市场局部竞价证据_20260418.md`
+5. `/docs/发布操作手册_20260418.md`
+
+---
+
+## Quick Start
+
+### CLI
+
+```bash
+python real_estate_demo_v2_1.py
+```
+
+### Web
+
+```bash
+python api_server.py
+```
+
+Then open the local web entry described in:
+
+- `/START_WEBSITE.md`
+
+### Public smoke
+
+```bash
 python scripts/public_smoke_test.py --rounds 1 --agent-count 8 --seed 42
 ```
 
 ---
 
-## Repository layout
+## Repository Layout
 
-- [docs/发布目录索引.md](./docs/发布目录索引.md): public repository map
-- [docs/Scholar_CLI_复现实验说明_20260412.md](./docs/Scholar_CLI_复现实验说明_20260412.md): how to reproduce public-facing runs
-- [evidence/market_validation_summary_public.md](./evidence/market_validation_summary_public.md): current public evidence summary
-- [assets/](./assets): visuals and release graphics
-- [config/](./config): public configuration set
-- [services/](./services): service layer
-- [scripts/](./scripts): orchestration and verification scripts
+- `/config` configuration, supply snapshots, persona background library
+- `/services` core market and transaction services
+- `/scripts` smoke runs, release runs, analysis and maintenance tooling
+- `/tests` public and release-facing regression tests
+- `/web` web UI
+- `/docs` release docs, manual, evidence notes, PPT materials
+- `/evidence` public summaries only
 
 ---
 
-## License and attribution
+## Important note on `month/months`
 
-This repository includes third-party notices and attribution files:
-
-- [LICENSE](./LICENSE)
-- [NOTICE](./NOTICE)
-- [ATTRIBUTION.md](./ATTRIBUTION.md)
+If you still see `month` or `months` in some internal code, database fields, or compatibility outputs, interpret them as **legacy-compatible internal names**, not as a claim that the simulation round equals a real calendar month.

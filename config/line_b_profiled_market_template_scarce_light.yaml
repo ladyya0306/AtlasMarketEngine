@@ -1,0 +1,268 @@
+profiled_market_mode:
+  enabled: false
+  profile_pack_id: line_b_controlled_market_v1
+  persona_generation_mode: code_only
+  background_library_path: config/persona_background_library.json
+  activation_prompt_mode: compact_persona_packet
+  startup_bucket_precheck: true
+  enforce_bucket_alignment: true
+  hard_bucket_matcher_enabled: false
+  hard_bucket_include_soft_buckets: false
+  hard_bucket_require_profiled_buyer: false
+  hard_bucket_strict_unmapped_property: true
+  experiment_modes:
+    abundant:
+      description: 画像匹配且供应充足
+    scarce:
+      description: 在同一买家画像结构下压缩关键供给桶
+  agent_profile_buckets:
+    A_SCHOOL_IMPROVE_HIGH:
+      role_side: buyer
+      count: 6
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: education_driven
+        housing_stage: owner_upgrade
+        family_stage: primary_school_before_transition
+        education_path: public_school_district_priority
+        financial_profile: balanced_finance
+        seller_profile: owner_occupier_upgrade
+      preference_profile:
+        target_zone: A
+        need_school_district: true
+        min_bedrooms: 3
+        property_type_target: IMPROVE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 4500000
+        - 5800000
+        max_price_range:
+        - 5200000
+        - 6800000
+        cash_range:
+        - 1500000
+        - 2600000
+        income_range:
+        - 35000
+        - 65000
+        payment_tolerance_ratio: 0.45
+        down_payment_tolerance_ratio: 0.3
+    A_NOSCHOOL_IMPROVE_MID:
+      role_side: buyer
+      count: 6
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: upgrade_living
+        housing_stage: owner_upgrade
+        family_stage: married_no_children
+        education_path: not_school_sensitive
+        financial_profile: balanced_finance
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 2
+        property_type_target: IMPROVE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 3800000
+        - 5000000
+        max_price_range:
+        - 4200000
+        - 5600000
+        cash_range:
+        - 1200000
+        - 2200000
+        income_range:
+        - 30000
+        - 58000
+        payment_tolerance_ratio: 0.42
+        down_payment_tolerance_ratio: 0.28
+    B_SCHOOL_JUST_ENTRY:
+      role_side: buyer
+      count: 8
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: starter_home
+        housing_stage: starter_no_home
+        family_stage: young_children
+        education_path: public_school_preferred
+        financial_profile: cashflow_sensitive
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: B
+        need_school_district: true
+        min_bedrooms: 2
+        property_type_target: JUST
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 900000
+        - 1300000
+        max_price_range:
+        - 1100000
+        - 1600000
+        cash_range:
+        - 280000
+        - 520000
+        income_range:
+        - 16000
+        - 26000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.24
+    B_NOSCHOOL_JUST_ENTRY:
+      role_side: buyer
+      count: 8
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: starter_home
+        housing_stage: starter_no_home
+        family_stage: single_or_couple_no_children
+        education_path: not_school_sensitive
+        financial_profile: cashflow_sensitive
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: B
+        need_school_district: false
+        min_bedrooms: 1
+        property_type_target: JUST
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 700000
+        - 1200000
+        max_price_range:
+        - 900000
+        - 1450000
+        cash_range:
+        - 220000
+        - 480000
+        income_range:
+        - 15000
+        - 24000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.22
+  property_profile_buckets:
+    A_SCHOOL_IMPROVE:
+      zone: A
+      is_school_district: true
+      property_type_bucket: IMPROVE
+      bedroom_range:
+      - 3
+      - 4
+      building_area_range:
+      - 95
+      - 125
+      quality_range:
+      - 2
+      - 3
+      price_range:
+      - 4300000
+      - 6200000
+      count_by_supply_mode:
+        abundant: 10
+        scarce: 5
+    A_NOSCHOOL_IMPROVE:
+      zone: A
+      is_school_district: false
+      property_type_bucket: IMPROVE
+      bedroom_range:
+      - 2
+      - 4
+      building_area_range:
+      - 85
+      - 120
+      quality_range:
+      - 2
+      - 3
+      price_range:
+      - 3600000
+      - 5400000
+      count_by_supply_mode:
+        abundant: 10
+        scarce: 6
+    B_SCHOOL_JUST:
+      zone: B
+      is_school_district: true
+      property_type_bucket: JUST
+      bedroom_range:
+      - 2
+      - 3
+      building_area_range:
+      - 60
+      - 90
+      quality_range:
+      - 1
+      - 2
+      price_range:
+      - 850000
+      - 1500000
+      count_by_supply_mode:
+        abundant: 12
+        scarce: 6
+    B_NOSCHOOL_JUST:
+      zone: B
+      is_school_district: false
+      property_type_bucket: JUST
+      bedroom_range:
+      - 1
+      - 2
+      building_area_range:
+      - 50
+      - 75
+      quality_range:
+      - 1
+      - 2
+      price_range:
+      - 600000
+      - 1300000
+      count_by_supply_mode:
+        abundant: 12
+        scarce: 7
+  bucket_alignment_rules:
+  - agent_bucket_id: A_SCHOOL_IMPROVE_HIGH
+    eligible_property_buckets:
+    - A_SCHOOL_IMPROVE
+    soft_property_buckets:
+    - A_NOSCHOOL_IMPROVE
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 3
+  - agent_bucket_id: A_NOSCHOOL_IMPROVE_MID
+    eligible_property_buckets:
+    - A_NOSCHOOL_IMPROVE
+    - A_SCHOOL_IMPROVE
+    soft_property_buckets: []
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 4
+  - agent_bucket_id: B_SCHOOL_JUST_ENTRY
+    eligible_property_buckets:
+    - B_SCHOOL_JUST
+    soft_property_buckets:
+    - B_NOSCHOOL_JUST
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 3
+  - agent_bucket_id: B_NOSCHOOL_JUST_ENTRY
+    eligible_property_buckets:
+    - B_NOSCHOOL_JUST
+    - B_SCHOOL_JUST
+    soft_property_buckets: []
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 4

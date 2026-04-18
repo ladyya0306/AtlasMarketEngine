@@ -16,6 +16,7 @@
 Core Logic for Agent Behavior (LLM Driven)
 """
 import json
+import os
 import random
 from enum import Enum
 from typing import Dict, List, Tuple
@@ -62,6 +63,280 @@ def _derive_family_stage(agent: Agent) -> str:
 def _stable_prompt_json(payload) -> str:
     """Stable JSON string for prompts to reduce non-essential token jitter."""
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+TIMING_ROLE_BUY_NOW = "buy_now"
+TIMING_ROLE_SELL_NOW = "sell_now"
+TIMING_ROLE_SELL_THEN_BUY = "sell_then_buy"
+TIMING_ROLE_NEED_WAIT = "need_wait"
+TIMING_ROLE_OBSERVE_WAIT = "observe_wait"
+
+VALID_TIMING_ROLES = {
+    TIMING_ROLE_BUY_NOW,
+    TIMING_ROLE_SELL_NOW,
+    TIMING_ROLE_SELL_THEN_BUY,
+    TIMING_ROLE_NEED_WAIT,
+    TIMING_ROLE_OBSERVE_WAIT,
+}
+
+VALID_URGENCY_LEVELS = {"high", "medium", "low"}
+
+_LIFE_SHOCK_KEYWORDS = (
+    "结婚",
+    "新婚",
+    "生子",
+    "生娃",
+    "怀孕",
+    "离婚",
+    "搬家",
+    "跨城",
+    "调动",
+    "失业",
+    "裁员",
+    "大病",
+    "重病",
+    "老人同住",
+)
+_DEADLINE_KEYWORDS = ("学区", "入学", "报名", "租约", "到期", "倒计时", "置换", "换房窗口")
+_SPACE_PRESSURE_KEYWORDS = ("改善", "换房", "拥挤", "多孩", "二胎", "三胎", "老人同住", "分房")
+_ELDERLY_KEYWORDS = ("老人", "父母同住", "赡养", "三代同堂")
+
+
+def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+    normalized = str(text or "")
+    return any(token in normalized for token in keywords)
+
+
+def _append_lifecycle_label(labels: List[str], details: List[str], label: str, detail: str) -> None:
+    if label not in labels:
+        labels.append(label)
+        if detail:
+            details.append(f"{label}:{detail}")
+
+
+def derive_decision_urgency(life_pressure: str) -> str:
+    normalized = str(life_pressure or "").strip().lower()
+    if normalized == "urgent":
+        return "high"
+    if normalized in {"calm", "opportunistic", "balanced"}:
+        return "medium"
+    return "low"
+
+
+def build_behavior_modifier(agent: Agent, decision_profile: str, info_delay_months: int) -> Dict[str, str]:
+    profile = str(decision_profile or getattr(agent, "agent_type", "normal") or "normal").strip().lower()
+    delay = max(0, int(info_delay_months or 0))
+    if profile == "smart":
+        return {
+            "profile": "smart",
+            "visibility": "real_time_structured" if delay <= 0 else f"delayed_{delay}m_but_structured",
+            "processing_anchor": "valuation_tradeoff_opportunity_cost",
+            "timing_bias": "earlier_or_countercyclical",
+            "stability_bias": "stable",
+        }
+    return {
+        "profile": "normal",
+        "visibility": "lagged_fragmented" if delay > 0 else "fragmented_realtime",
+        "processing_anchor": "headline_social_proof_life_pressure",
+        "timing_bias": "lagged_or_following",
+        "stability_bias": "swayed",
+    }
+
+
+def build_activation_lifecycle_packet(
+    agent: Agent,
+    month: int,
+    *,
+    min_cash_observer: float = 500000.0,
+    holding_lock_months: int = 12,
+    market_signal_packet: Dict[str, object] | None = None,
+) -> Dict[str, object]:
+    labels: List[str] = []
+    detail_lines: List[str] = []
+    market_signal_packet = dict(
+        market_signal_packet
+        or getattr(agent, "_seller_market_signal_packet", {})
+        or {}
+    )
+    family_stage = str(getattr(getattr(agent, "story", None), "family_stage", "") or "")
+    housing_stage = str(getattr(getattr(agent, "story", None), "housing_stage", "") or "")
+    education_path = str(getattr(getattr(agent, "story", None), "education_path", "") or "")
+    financial_profile = str(getattr(getattr(agent, "story", None), "financial_profile", "") or "")
+    purchase_motive = str(getattr(getattr(agent, "story", None), "purchase_motive_primary", "") or "")
+    housing_need = str(getattr(getattr(agent, "story", None), "housing_need", "") or "")
+    current_event = str(getattr(agent, "current_life_event", "") or "")
+    life_events = getattr(agent, "life_events", {}) or {}
+    recent_events: List[str] = []
+    for candidate in (
+        current_event,
+        str(life_events.get(month, "") or ""),
+        str(life_events.get(max(0, month - 1), "") or ""),
+        str(life_events.get(0, "") or ""),
+    ):
+        candidate = candidate.strip()
+        if candidate and candidate not in recent_events:
+            recent_events.append(candidate)
+    recent_event_text = " | ".join(recent_events)
+
+    if recent_event_text and _contains_any(recent_event_text, _LIFE_SHOCK_KEYWORDS):
+        _append_lifecycle_label(labels, detail_lines, "LIFE_SHOCK", recent_events[0])
+
+    household_size = 1
+    if str(getattr(agent, "marital_status", "") or "").lower() == "married":
+        household_size += 1
+    children = list(getattr(agent, "children_ages", []) or [])
+    household_size += len(children)
+    if _contains_any(housing_need, _ELDERLY_KEYWORDS) or _contains_any(family_stage, ("elder", "sandwich", "grown_children_with_parents")):
+        household_size += 1
+
+    owned_properties = list(getattr(agent, "owned_properties", []) or [])
+    livable_areas = [float(prop.get("building_area", 0.0) or 0.0) for prop in owned_properties if float(prop.get("building_area", 0.0) or 0.0) > 0]
+    primary_area = max(livable_areas) if livable_areas else 0.0
+    area_per_person = (primary_area / household_size) if household_size > 0 and primary_area > 0 else 0.0
+    space_squeeze = False
+    if household_size >= 3 and primary_area > 0 and area_per_person < 22:
+        space_squeeze = True
+    if _contains_any(housing_need, _SPACE_PRESSURE_KEYWORDS):
+        space_squeeze = True
+    if family_stage in {"young_family", "young_children", "primary_school_before_transition"} and household_size >= 3 and primary_area > 0 and area_per_person < 28:
+        space_squeeze = True
+    if housing_stage == "owner_upgrade" and family_stage in {"young_family", "young_children"}:
+        space_squeeze = True
+    if space_squeeze:
+        detail = f"household={household_size}, area_per_person={area_per_person:.1f}" if area_per_person > 0 else f"household={household_size}, need={housing_need[:24]}"
+        _append_lifecycle_label(labels, detail_lines, "SPACE_SQUEEZE", detail)
+
+    deadline_pressure = False
+    if family_stage in {"primary_school_before_transition", "junior_school_transition", "senior_school_transition"}:
+        deadline_pressure = True
+    if education_path and education_path != "not_school_sensitive":
+        deadline_pressure = deadline_pressure or _contains_any(education_path, ("school", "学区", "priority", "district"))
+    if _contains_any(housing_need, _DEADLINE_KEYWORDS) or _contains_any(recent_event_text, _DEADLINE_KEYWORDS):
+        deadline_pressure = True
+    if deadline_pressure:
+        detail = family_stage or education_path or housing_need[:24]
+        _append_lifecycle_label(labels, detail_lines, "DEADLINE_PRESSURE", detail)
+
+    monthly_income = float(getattr(agent, "monthly_income", 0.0) or 0.0)
+    cash = float(getattr(agent, "cash", 0.0) or 0.0)
+    liquidity_ready = False
+    if not owned_properties:
+        liquidity_ready = cash >= max(float(min_cash_observer or 0.0) * 1.2, monthly_income * 12.0)
+    else:
+        liquidity_ready = cash >= max(300000.0, monthly_income * 10.0)
+    if liquidity_ready:
+        _append_lifecycle_label(labels, detail_lines, "LIQUIDITY_READY", f"cash={cash:,.0f}")
+
+    replacement_candidate = bool(owned_properties) and (
+        housing_stage in {"owner_upgrade", "multi_property_holder"}
+        or purchase_motive in {"upgrade_living", "education_driven", "asset_reallocation"}
+        or _contains_any(housing_need, ("换房", "改善", "学区"))
+    )
+    if replacement_candidate and cash < max(300000.0, monthly_income * 12.0):
+        _append_lifecycle_label(labels, detail_lines, "CHAIN_BLOCKED", f"cash={cash:,.0f}")
+    elif replacement_candidate and (cash >= max(600000.0, monthly_income * 18.0) or bool(getattr(agent, "sell_completed", 0))):
+        _append_lifecycle_label(labels, detail_lines, "CHAIN_UNLOCKED", f"cash={cash:,.0f}")
+
+    for prop in owned_properties:
+        acquired_month = int(prop.get("acquired_month", 0) or 0)
+        if acquired_month > 0 and (month - acquired_month) < max(1, int(holding_lock_months or 12)):
+            months_held = max(0, month - acquired_month)
+            _append_lifecycle_label(
+                labels,
+                detail_lines,
+                "RECENTLY_PURCHASED_LOCKED",
+                f"property={int(prop.get('property_id', -1) or -1)}, held={months_held}m",
+            )
+            break
+
+    if market_signal_packet:
+        cooldown_active = bool(market_signal_packet.get("cooldown_active", False))
+        if cooldown_active:
+            _append_lifecycle_label(
+                labels,
+                detail_lines,
+                "SELLER_REWAKE_COOLDOWN",
+                str(market_signal_packet.get("cooldown_detail", "recent seller rewake")).strip() or "recent seller rewake",
+            )
+        else:
+            if bool(market_signal_packet.get("local_price_push_window", False)):
+                _append_lifecycle_label(
+                    labels,
+                    detail_lines,
+                    "LOCAL_PRICE_PUSH_WINDOW",
+                    str(market_signal_packet.get("local_price_push_detail", "recent local real-bid pressure")).strip()
+                    or "recent local real-bid pressure",
+                )
+            if bool(market_signal_packet.get("replacement_old_home_release", False)):
+                _append_lifecycle_label(
+                    labels,
+                    detail_lines,
+                    "REPLACEMENT_OLD_HOME_RELEASE",
+                    str(market_signal_packet.get("replacement_release_detail", "replacement old home can be released")).strip()
+                    or "replacement old home can be released",
+                )
+            if bool(market_signal_packet.get("scarcity_match_window", False)):
+                _append_lifecycle_label(
+                    labels,
+                    detail_lines,
+                    "SCARCITY_MATCH_WINDOW",
+                    str(market_signal_packet.get("scarcity_detail", "demand gap matches owned supply")).strip()
+                    or "demand gap matches owned supply",
+                )
+
+    if financial_profile in {"cashflow_sensitive", "payment_sensitive", "income_stressed"} and "CHAIN_BLOCKED" not in labels and owned_properties:
+        _append_lifecycle_label(labels, detail_lines, "CHAIN_BLOCKED", financial_profile)
+
+    if {"LIFE_SHOCK", "DEADLINE_PRESSURE"} & set(labels):
+        entry_window = "immediate_window"
+    elif {
+        "SPACE_SQUEEZE",
+        "CHAIN_BLOCKED",
+        "CHAIN_UNLOCKED",
+        "LIQUIDITY_READY",
+        "LOCAL_PRICE_PUSH_WINDOW",
+        "REPLACEMENT_OLD_HOME_RELEASE",
+        "SCARCITY_MATCH_WINDOW",
+    } & set(labels):
+        entry_window = "watch_window"
+    else:
+        entry_window = "background_window"
+
+    summary = " | ".join(detail_lines) if detail_lines else "无明显生命周期窗口标签"
+    return {
+        "labels": labels,
+        "detail_lines": detail_lines,
+        "summary": summary,
+        "entry_window": entry_window,
+        "recent_events": recent_events,
+        "household_size": household_size,
+        "primary_area": primary_area,
+        "area_per_person": round(area_per_person, 2) if area_per_person > 0 else 0.0,
+        "market_signal_packet": market_signal_packet,
+        "market_signal_labels": [
+            label
+            for label in (
+                "LOCAL_PRICE_PUSH_WINDOW",
+                "REPLACEMENT_OLD_HOME_RELEASE",
+                "SCARCITY_MATCH_WINDOW",
+                "SELLER_REWAKE_COOLDOWN",
+            )
+            if label in labels
+        ],
+        "market_signal_summary": " | ".join(
+            line
+            for line in detail_lines
+            if any(
+                line.startswith(prefix)
+                for prefix in (
+                    "LOCAL_PRICE_PUSH_WINDOW:",
+                    "REPLACEMENT_OLD_HOME_RELEASE:",
+                    "SCARCITY_MATCH_WINDOW:",
+                    "SELLER_REWAKE_COOLDOWN:",
+                )
+            )
+        ),
+    }
 
 
 def _derive_housing_stage(agent: Agent) -> str:
@@ -1768,7 +2043,7 @@ def calculate_activation_probability(agent: Agent) -> float:
 
 # --- Constant System Prompt for Caching ---
 BATCH_ROLE_SYSTEM_PROMPT = """你是一个房地产市场模拟引擎。
-【任务】判断Agent本月是否产生买卖房产需求。
+【任务】判断Agent本月是否进入住房决策窗口，并给出“本月时点角色”。
 【规则】
 1. 默认角色为 OBSERVER (无操作)
 2. 角色定义:
@@ -1779,11 +2054,26 @@ BATCH_ROLE_SYSTEM_PROMPT = """你是一个房地产市场模拟引擎。
    - 只有持有房产 (props > 0) 才能成为 SELLER 或 BUYER_SELLER。
    - 现金不足阈值由输入参数指定；低于阈值且无房产者只能是 OBSERVER。
    - **推理约束**: 若无房产(props=0)，严禁在 reasoning 中虚构“卖掉名下房产”/“卖老破小”。资金来源必须描述为“卖掉外省老家房产”或“父母资助”。
-4. 输出JSON列表，包含所有产生变化的Agent。
-5. 每个条目包含：
+4. 你必须先判断 timing_role，再给出 role。timing_role 只能是：
+   - buy_now: 本月立即买 / 立即推进买入
+   - sell_now: 本月立即卖 / 立即挂牌或变现
+   - sell_then_buy: 本月先卖后买
+   - need_wait: 有住房需求，但本月暂不进场
+   - observe_wait: 继续观望，本月没有明确入场动作
+5. role 与 timing_role 必须一致：
+   - timing_role=buy_now -> role 只能是 BUYER 或 BUYER_SELLER
+   - timing_role=sell_now -> role 必须是 SELLER
+   - timing_role=sell_then_buy -> role 必须是 BUYER_SELLER，且 chain_mode=sell_first
+   - timing_role in {need_wait, observe_wait} -> role 必须是 OBSERVER
+6. lifecycle_labels / lifecycle_summary 是“本月决策窗口”的上下文提示，只能帮助你判断，不允许机械套标签下结论。
+7. smart / normal 的差异只是同一决策窗口内的信息面与判断风格差异，不是需求来源本身。
+8. 输出JSON列表，包含所有产生变化的Agent。
+9. 每个条目包含：
    - id
    - role (BUYER/SELLER/BUYER_SELLER)
+   - timing_role
    - trigger (触发原因)
+   - urgency_level: "high"|"medium"|"low"
    - life_pressure: "urgent"(迫切), "patient"(耐心), "opportunistic"(投机)
    - price_expectation: 浮点数 (1.0-1.2)
    - chain_mode: 仅当 role=BUYER_SELLER 时填写 "sell_first" 或 "buy_first"
@@ -1792,9 +2082,27 @@ BATCH_ROLE_SYSTEM_PROMPT = """你是一个房地产市场模拟引擎。
 
 输出示例：
 [
-    {"id": 101, "role": "BUYER", "trigger": "婚房刚需", "life_pressure": "urgent", "price_expectation": 1.1},
-    {"id": 102, "role": "SELLER", "trigger": "资金周转", "life_pressure": "urgent", "price_expectation": 0.95}
+    {"id": 101, "role": "BUYER", "timing_role": "buy_now", "trigger": "婚房刚需", "urgency_level": "high", "life_pressure": "urgent", "price_expectation": 1.1},
+    {"id": 102, "role": "SELLER", "timing_role": "sell_now", "trigger": "资金周转", "urgency_level": "high", "life_pressure": "urgent", "price_expectation": 0.95}
 ]"""
+
+BUYER_SELLER_CHAIN_SYSTEM_PROMPT = """你在帮助一个“既可能买也可能卖”的家庭做本月行动决策。
+【任务】
+只判断这个家庭本月更像下面哪一种：
+1. buy_first：本月先继续找房、推进买入。
+2. sell_first：本月先挂牌/先卖旧房，再考虑买入。
+
+【重要边界】
+1. 你只能决定“本月先做什么”，不能替系统执行成交。
+2. 你必须结合这个家庭自己的现金、收入、已有住房、生活阶段和市场环境。
+3. 若家庭无房，不可选择 sell_first；若已有房，也不能机械默认 sell_first。
+4. “是否本月继续观望”已经在上一层激活阶段判断过；既然进入这一层，就只允许在 buy_first / sell_first 中二选一。
+
+【输出格式】
+输出严格 JSON 对象：
+{"chain_mode":"buy_first","reason":"..."}
+其中 chain_mode 只能是 buy_first / sell_first
+"""
 
 
 def _build_market_memory_one_liner(market_trend: str, recent_bulletins: List[str] = None) -> str:
@@ -1852,6 +2160,13 @@ def batched_determine_role(
     # Construct Batch Data
     agent_summaries = []
     for a in agents:
+        persona_packet = getattr(a, "_activation_persona_packet", {}) or {}
+        info_delay = int(persona_packet.get("info_delay_months", getattr(a, "info_delay_months", 0)) or 0)
+        lifecycle_packet = build_activation_lifecycle_packet(
+            a,
+            month,
+            min_cash_observer=min_cash_observer,
+        )
         summary = {
             "id": a.id,
             "age": a.age,
@@ -1866,6 +2181,31 @@ def batched_determine_role(
             "family_stage": getattr(a.story, "family_stage", ""),
             "education_path": getattr(a.story, "education_path", ""),
             "financial_profile": getattr(a.story, "financial_profile", ""),
+            "profile_bucket_id": persona_packet.get("profile_bucket_id", getattr(a, "profile_bucket_id", "")),
+            "role_side_hint": persona_packet.get("role_side_hint", ""),
+            "target_zone": persona_packet.get("target_zone", getattr(a.preference, "target_zone", "")),
+            "need_school_district": bool(
+                persona_packet.get(
+                    "need_school_district",
+                    getattr(a.preference, "need_school_district", False),
+                )
+            ),
+            "property_type_target": persona_packet.get("property_type_target", ""),
+            "budget_band": persona_packet.get("budget_band", ""),
+            "eligible_property_bucket_count_this_month": persona_packet.get(
+                "eligible_property_bucket_count_this_month",
+                0,
+            ),
+            "bucket_supply_pressure": persona_packet.get("bucket_supply_pressure", ""),
+            "buyer_to_supply_ratio": persona_packet.get("buyer_to_supply_ratio", 0.0),
+            "info_delay_months": info_delay,
+            "lifecycle_labels": lifecycle_packet["labels"],
+            "lifecycle_summary": lifecycle_packet["summary"],
+            "entry_window": lifecycle_packet["entry_window"],
+            "recent_events": lifecycle_packet["recent_events"],
+            "market_signal_labels": lifecycle_packet.get("market_signal_labels", []),
+            "market_signal_summary": lifecycle_packet.get("market_signal_summary", ""),
+            "behavior_modifier": build_behavior_modifier(a, getattr(a, "agent_type", "normal"), info_delay),
         }
         agent_summaries.append(summary)
 
@@ -1911,9 +2251,127 @@ async def batched_determine_role_async(
     if not agents:
         return []
 
+    # Offline/CI-friendly mode: return deterministic "mock LLM" decisions.
+    # This keeps the pipeline runnable when real LLM network calls are unavailable,
+    # while preserving the project rule that "role choice is LLM-layer output".
+    mock_mode = str(os.getenv("LLM_MOCK_MODE", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    if mock_mode:
+        results: list[dict] = []
+        trend = str(market_trend or "STABLE").upper()
+        for a in agents:
+            has_props = bool(getattr(a, "owned_properties", None))
+            cash = float(getattr(a, "cash", 0) or 0)
+            income = float(getattr(a, "monthly_income", 0) or 0)
+            housing_need = str(getattr(getattr(a, "story", None), "housing_need", "") or "")
+            housing_stage = str(getattr(getattr(a, "story", None), "housing_stage", "") or "")
+            family_stage = str(getattr(getattr(a, "story", None), "family_stage", "") or "")
+            investment_style = str(getattr(getattr(a, "story", None), "investment_style", "balanced") or "balanced").lower()
+            chain_mode = None
+            lifecycle_packet = build_activation_lifecycle_packet(
+                a,
+                month,
+                min_cash_observer=min_cash_observer,
+            )
+            lifecycle_labels = list(lifecycle_packet["labels"])
+
+            urgent_tokens = ("学", "入学", "结婚", "生", "二胎", "三胎", "换房", "改善", "赡养", "养老", "分家", "裂变")
+            is_urgent = any(t in housing_need for t in urgent_tokens) or any(t in family_stage for t in urgent_tokens)
+            deadline_pressure = "DEADLINE_PRESSURE" in lifecycle_labels or is_urgent
+            chain_blocked = "CHAIN_BLOCKED" in lifecycle_labels
+            liquidity_ready = "LIQUIDITY_READY" in lifecycle_labels
+
+            if (not has_props) and cash < float(min_cash_observer or 0):
+                role = "OBSERVER"
+                trigger = "cash_insufficient"
+                reason = "现金低于观望底线，暂时无法入场。"
+                timing_role = TIMING_ROLE_NEED_WAIT if lifecycle_labels else TIMING_ROLE_OBSERVE_WAIT
+                life_pressure = "urgent" if deadline_pressure else "patient"
+            elif has_props and ("upgrade" in housing_stage or "改善" in housing_need or "换房" in housing_need):
+                # Owners with clear upgrade intent: buy-sell linkage.
+                role = "BUYER_SELLER"
+                trigger = "upgrade_cycle"
+                if chain_blocked or (not liquidity_ready and not deadline_pressure):
+                    timing_role = TIMING_ROLE_SELL_THEN_BUY
+                    chain_mode = "sell_first"
+                    reason = "已持房且有改善/置换动机，但当前资金链更像先卖后买。"
+                else:
+                    timing_role = TIMING_ROLE_BUY_NOW
+                    chain_mode = "buy_first"
+                    reason = "已持房且有改善/置换动机，本月会先继续推进买入。"
+                life_pressure = "urgent" if deadline_pressure else "opportunistic"
+            elif has_props and cash < float(min_cash_observer or 0) * 1.2 and income < 18000:
+                role = "SELLER"
+                trigger = "cash_pressure"
+                reason = "已持房但现金/收入压力偏大，倾向于先卖房释放资金。"
+                timing_role = TIMING_ROLE_SELL_NOW
+                life_pressure = "urgent"
+            else:
+                # No property + above observer floor, or owners without strong sell trigger.
+                if (not has_props) and (deadline_pressure or liquidity_ready or income >= 20000):
+                    role = "BUYER"
+                    timing_role = TIMING_ROLE_BUY_NOW
+                    trigger = "life_event" if deadline_pressure else "budget_ready"
+                    reason = "具备基本入场能力，且本月窗口已打开。"
+                    life_pressure = "urgent" if deadline_pressure else "opportunistic"
+                    # In a hot (seller) market, conservative profiles may wait.
+                    if trend in {"PANIC_UP", "HOT", "SELLER"} and investment_style == "conservative" and not deadline_pressure:
+                        role = "OBSERVER"
+                        timing_role = TIMING_ROLE_NEED_WAIT
+                        trigger = "wait_for_cooldown"
+                        reason = "市场偏热且不紧迫，倾向继续观望等待。"
+                        life_pressure = "patient"
+                else:
+                    role = "OBSERVER"
+                    timing_role = TIMING_ROLE_NEED_WAIT if lifecycle_labels else TIMING_ROLE_OBSERVE_WAIT
+                    trigger = "choose_to_wait"
+                    reason = "当前存在需求但窗口未完全打开，或仍需继续等待。"
+                    life_pressure = "patient"
+
+            risk_mode = "aggressive" if investment_style == "aggressive" else "conservative" if investment_style == "conservative" else "balanced"
+            urgency_level = (
+                "high"
+                if timing_role in {TIMING_ROLE_BUY_NOW, TIMING_ROLE_SELL_NOW, TIMING_ROLE_SELL_THEN_BUY} and deadline_pressure
+                else "medium"
+                if timing_role in {TIMING_ROLE_BUY_NOW, TIMING_ROLE_SELL_NOW, TIMING_ROLE_SELL_THEN_BUY, TIMING_ROLE_NEED_WAIT}
+                else "low"
+            )
+            results.append(
+                {
+                    "id": int(getattr(a, "id", -1) or -1),
+                    "role": role,
+                    "timing_role": timing_role,
+                    "trigger": trigger,
+                    "reason": reason,
+                    "urgency_level": urgency_level,
+                    "life_pressure": life_pressure,
+                    "price_expectation": 1.0,
+                    "chain_mode": chain_mode if role == "BUYER_SELLER" else None,
+                    "risk_mode": risk_mode,
+                    "listing_action": "KEEP",
+                    "lifecycle_labels": lifecycle_labels,
+                    "lifecycle_summary": lifecycle_packet["summary"],
+                    "behavior_modifier": build_behavior_modifier(a, decision_profile, int(getattr(a, "info_delay_months", 0) or 0)),
+                    "_decision_origin": "mock_llm_activation",
+                    "_llm_called": False,
+                }
+            )
+        return results
+
     # Construct Batch Data
     agent_summaries = []
     for a in agents:
+        info_delay = int(getattr(a, "info_delay_months", 0) or 0)
+        lifecycle_packet = build_activation_lifecycle_packet(
+            a,
+            month,
+            min_cash_observer=min_cash_observer,
+        )
         summary = {
             "id": a.id,
             "age": a.age,
@@ -1928,6 +2386,14 @@ async def batched_determine_role_async(
             "family_stage": getattr(a.story, "family_stage", ""),
             "education_path": getattr(a.story, "education_path", ""),
             "financial_profile": getattr(a.story, "financial_profile", ""),
+            "info_delay_months": info_delay,
+            "lifecycle_labels": lifecycle_packet["labels"],
+            "lifecycle_summary": lifecycle_packet["summary"],
+            "entry_window": lifecycle_packet["entry_window"],
+            "recent_events": lifecycle_packet["recent_events"],
+            "market_signal_labels": lifecycle_packet.get("market_signal_labels", []),
+            "market_signal_summary": lifecycle_packet.get("market_signal_summary", ""),
+            "behavior_modifier": build_behavior_modifier(a, decision_profile, info_delay),
         }
         agent_summaries.append(summary)
 
@@ -1956,21 +2422,30 @@ async def batched_determine_role_async(
     - 无房且现金 < {min_cash_observer:,.0f} 元者只能是 OBSERVER。
 
     【任务】
-    请分析以下Agent列表，根据他们的财务状况、需求、宏观环境和近期市场动态，决定每个人本月的角色 (BUYER, SELLER, OBSERVER)。
-    - BUYER: 有购房意愿且有能力。若市场过热(Panic Up)且Agent保守，应谨慎；若Agent激进，可能追涨。
-    - SELLER: 有卖房意愿且持有房产。若市场下跌，可能恐慌抛售；若上涨，可能止盈。
-    - OBSERVER: 暂时观望。
+    请分析以下Agent列表，根据他们的财务状况、需求、宏观环境和近期市场动态，判断每个人本月是否进入住房决策窗口，并输出 timing_role + role。
+    - buy_now: 本月立即买/推进买入。对应 role=BUYER 或 BUYER_SELLER。
+    - sell_now: 本月立即卖/推进卖出。对应 role=SELLER。
+    - sell_then_buy: 本月先卖后买。对应 role=BUYER_SELLER，且 chain_mode=sell_first。
+    - need_wait: 有住房需求，但本月不进场。对应 role=OBSERVER。
+    - observe_wait: 继续观望。对应 role=OBSERVER。
+    - 若提供了 `profile_bucket_id / role_side_hint / target_zone / need_school_district / property_type_target / budget_band / eligible_property_bucket_count_this_month / bucket_supply_pressure`，
+      请把它们当作该人本月所处的结构化画像与可见供需上下文；它们用于帮助你理解这类人通常会关注什么房、面临什么供需压力，但不能替代你对个人是否激活的判断。
+    - `lifecycle_labels / lifecycle_summary / entry_window` 是本月生命周期窗口提示；请先判断“窗口是否打开”，再判断角色。
+    - `market_signal_labels / market_signal_summary` 是卖方侧供给续航提示，只能作为“是否进入卖方窗口”的辅助事实，不允许机械见到标签就直接输出 SELLER。
+    - `behavior_modifier` 描述 smart/normal 在同一决策窗口内的可见信息、处理参照系、行动时点与稳定性差异。
     {profile_detail}
 
     【重要约束】
     1. 若Agent无房产(props=0)，严禁在 reasoning 中虚构“卖掉郊区房产”或“卖掉名下房产”等理由。若需描述资金来源，必须描述为“卖掉外省老家房产”或“父母资助”。
     2. 无房产者不可成为 SELLER。
+    3. 若 timing_role=need_wait 或 observe_wait，role 必须是 OBSERVER。
+    4. 若 timing_role=sell_then_buy，role 必须是 BUYER_SELLER，且 chain_mode=sell_first。
 
     【输出要求】
     请输出严格的JSON列表格式，包含每个Agent的决策：
     [
-      {{"id": 123, "role": "BUYER", "trigger": "life_event", "reason": "...", "life_pressure": "calm", "price_expectation": 1.0, "risk_mode": "balanced", "listing_action": "KEEP"}},
-      {{"id": 456, "role": "BUYER_SELLER", "trigger": "换房", "reason": "...", "life_pressure": "urgent", "price_expectation": 1.02, "chain_mode": "sell_first", "risk_mode": "conservative", "listing_action": "KEEP"}}
+      {{"id": 123, "role": "BUYER", "timing_role": "buy_now", "trigger": "life_event", "reason": "...", "urgency_level": "high", "life_pressure": "calm", "price_expectation": 1.0, "risk_mode": "balanced", "listing_action": "KEEP"}},
+      {{"id": 456, "role": "BUYER_SELLER", "timing_role": "sell_then_buy", "trigger": "换房", "reason": "...", "urgency_level": "high", "life_pressure": "urgent", "price_expectation": 1.02, "chain_mode": "sell_first", "risk_mode": "conservative", "listing_action": "KEEP"}}
     ]
 
     【待处理Agent列表】({len(agents)}人):
@@ -1991,6 +2466,138 @@ async def batched_determine_role_async(
         return []
 
     return response
+
+
+async def determine_buyer_seller_chain_mode_async(
+    agent: Agent,
+    month: int,
+    market: Market,
+    *,
+    macro_summary: str = "平稳",
+    market_trend: str = "STABLE",
+    recent_bulletins: list | None = None,
+    decision_profile: str = "normal",
+    prior_reason: str = "",
+    model_type: str = "fast",
+) -> Dict:
+    """LLM decides whether an already-activated BUYER_SELLER should buy first or sell first this month."""
+    mock_mode = str(os.getenv("LLM_MOCK_MODE", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    if mock_mode:
+        housing_need = str(getattr(getattr(agent, "story", None), "housing_need", "") or "")
+        family_stage = str(getattr(getattr(agent, "story", None), "family_stage", "") or "")
+        purchase_motive = str(getattr(getattr(agent, "story", None), "purchase_motive_primary", "") or "")
+        investment_style = str(
+            getattr(getattr(agent, "story", None), "investment_style", "balanced") or "balanced"
+        ).lower()
+        cash = float(getattr(agent, "cash", 0.0) or 0.0)
+        income = float(getattr(agent, "monthly_income", 0.0) or 0.0)
+        urgent_tokens = ("学", "入学", "结婚", "生", "二胎", "三胎", "换房", "改善", "赡养", "养老", "分家", "裂变")
+        is_urgent = any(t in housing_need for t in urgent_tokens) or any(t in family_stage for t in urgent_tokens)
+        has_school_window = family_stage in {"primary_school_before_transition", "junior_school_transition", "senior_school_transition"}
+        trend = str(market_trend or "STABLE").upper()
+
+        if cash < max(300000.0, income * 10.0):
+            choice = "sell_first"
+            reason = "现金缓冲偏薄，先卖旧房更稳妥。"
+        elif trend in {"PANIC_UP", "HOT", "SELLER"} and investment_style == "conservative" and not is_urgent:
+            choice = "sell_first"
+            reason = "市场偏热且并不紧迫，先卖旧房、保住资金弹性更稳妥。"
+        elif has_school_window or purchase_motive in {"education_driven", "upgrade_living"}:
+            choice = "buy_first"
+            reason = "家庭阶段或改善任务更急，本月会先继续看房推进。"
+        else:
+            choice = "sell_first"
+            reason = "更像置换型家庭，先卖后买更符合当前节奏。"
+
+        return {
+            "chain_mode": choice,
+            "reason": reason,
+            "llm_called": False,
+            "decision_profile": str(decision_profile or "normal"),
+            "mock_mode": True,
+        }
+
+    bulletin_text = _build_market_memory_one_liner(market_trend, recent_bulletins)
+    owned_props = []
+    for prop in list(getattr(agent, "owned_properties", []) or [])[:3]:
+        owned_props.append(
+            {
+                "property_id": int(prop.get("property_id", -1) or -1),
+                "zone": str(prop.get("zone", "") or ""),
+                "base_value": float(prop.get("base_value", 0.0) or 0.0),
+                "status": str(prop.get("status", "") or ""),
+                "is_school_district": int(prop.get("is_school_district", 0) or 0),
+            }
+        )
+    summary = {
+        "id": int(getattr(agent, "id", -1) or -1),
+        "month": int(month),
+        "age": int(getattr(agent, "age", 0) or 0),
+        "cash": float(getattr(agent, "cash", 0.0) or 0.0),
+        "income": float(getattr(agent, "monthly_income", 0.0) or 0.0),
+        "owned_properties": owned_props,
+        "housing_need": str(getattr(agent.story, "housing_need", "") or ""),
+        "purchase_motive_primary": str(getattr(agent.story, "purchase_motive_primary", "") or ""),
+        "housing_stage": str(getattr(agent.story, "housing_stage", "") or ""),
+        "family_stage": str(getattr(agent.story, "family_stage", "") or ""),
+        "education_path": str(getattr(agent.story, "education_path", "") or ""),
+        "financial_profile": str(getattr(agent.story, "financial_profile", "") or ""),
+        "investment_style": str(getattr(agent.story, "investment_style", "balanced") or "balanced"),
+        "prior_role_reason": str(prior_reason or ""),
+    }
+    profile_hint = (
+        "你获取的信息更完整，会比较资金链、卖旧房难度、看房紧迫度和市场热度。"
+        if decision_profile == "smart"
+        else "你是信息有限的普通家庭/普通业主，更看重眼前生活压力、周围氛围和滞后的市场印象。"
+    )
+    prompt = f"""
+【当前宏观环境】{macro_summary} (市场趋势: {market_trend})
+【决策路径】{decision_profile}
+【路径提示】{profile_hint}
+
+【近期市场动态 (Market Memory, One-Liner)】
+{bulletin_text}
+
+【任务】
+这个家庭已经被判断为“既可能买也可能卖”的置换型/联动型角色。
+请你只判断：它本月应该更像 buy_first 还是 sell_first。
+
+【判断要点】
+1. 如果现金缓冲薄、旧房不卖很难接新房，倾向 sell_first。
+2. 如果生活任务很急（如上学窗口、明显改善刚需），且资金还能撑住，可能 buy_first。
+3. 这个家庭已经通过上一层激活判断，本题不再回答“是否观望”，只能在 buy_first / sell_first 中二选一。
+4. 不要机械地“有房就先卖”；也不要机械地“想换房就一定马上买”。
+
+【待判断家庭】
+{_stable_prompt_json(summary)}
+"""
+    default_choice = "sell_first" if float(getattr(agent, "cash", 0.0) or 0.0) < max(300000.0, float(getattr(agent, "monthly_income", 0.0) or 0.0) * 12.0) else "buy_first"
+    default_resp = {
+        "chain_mode": default_choice,
+        "reason": "Fallback chain-mode decision",
+    }
+    resp = await safe_call_llm_async(
+        prompt,
+        default_resp,
+        system_prompt=BUYER_SELLER_CHAIN_SYSTEM_PROMPT,
+        model_type=model_type,
+    )
+    chain_mode = str((resp or {}).get("chain_mode", default_choice) or default_choice).strip().lower()
+    if chain_mode not in {"buy_first", "sell_first"}:
+        chain_mode = default_choice
+    return {
+        "chain_mode": chain_mode,
+        "reason": str((resp or {}).get("reason", "") or ""),
+        "llm_called": True,
+        "decision_profile": str(decision_profile or "normal"),
+        "mock_mode": False,
+    }
 
 
 # --- 5. Open Role Evaluation (LLM-Driven Free Strategy) ---

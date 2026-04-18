@@ -102,6 +102,10 @@ def init_db(db_path):
             chain_mode TEXT,
             sell_completed INTEGER DEFAULT 0,
             buy_completed INTEGER DEFAULT 0,
+            timing_role TEXT DEFAULT '',
+            decision_urgency TEXT DEFAULT '',
+            lifecycle_labels TEXT DEFAULT '[]',
+            lifecycle_summary TEXT DEFAULT '',
             llm_intent_summary TEXT,
             activated_month INTEGER,
             role_duration INTEGER,
@@ -515,6 +519,10 @@ def migrate_db_v2_7(db_path):
     _ensure_column(cursor, "active_participants", "chain_mode", "TEXT")
     _ensure_column(cursor, "active_participants", "sell_completed", "INTEGER DEFAULT 0")
     _ensure_column(cursor, "active_participants", "buy_completed", "INTEGER DEFAULT 0")
+    _ensure_column(cursor, "active_participants", "timing_role", "TEXT DEFAULT ''")
+    _ensure_column(cursor, "active_participants", "decision_urgency", "TEXT DEFAULT ''")
+    _ensure_column(cursor, "active_participants", "lifecycle_labels", "TEXT DEFAULT '[]'")
+    _ensure_column(cursor, "active_participants", "lifecycle_summary", "TEXT DEFAULT ''")
 
     # agents_static
     _ensure_column(cursor, "agents_static", "agent_type", "TEXT DEFAULT 'normal'")
@@ -550,6 +558,7 @@ def migrate_db_v2_7(db_path):
     _ensure_column(cursor, "properties_market", "sell_deadline_total_months", "INTEGER")
     _ensure_column(cursor, "properties_market", "sell_urgency_score", "REAL")
     _ensure_column(cursor, "properties_market", "forced_sale_mode", "INTEGER DEFAULT 0")
+    _ensure_column(cursor, "properties_market", "acquired_month", "INTEGER")
     _ensure_column(cursor, "properties_static", "build_year", "INTEGER")
 
     # market_bulletin

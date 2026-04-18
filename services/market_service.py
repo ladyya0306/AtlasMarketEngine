@@ -16,6 +16,17 @@ class MarketService:
         self.consecutive_trend = 0
         self.market = None  # Initialized later
 
+    def _database_path_hint(self) -> str:
+        try:
+            rows = self.conn.execute("PRAGMA database_list").fetchall()
+            for row in rows:
+                path = row[2] if len(row) >= 3 else ""
+                if path:
+                    return str(path)
+        except Exception:
+            pass
+        return "当前 run 目录下的 simulation.db"
+
     def initialize_market(self):
         """Initialize market properties based on configuration."""
         user_prop_count = getattr(self.config, 'user_property_count', None)
@@ -124,7 +135,8 @@ class MarketService:
             SELECT ps.property_id, ps.zone, ps.quality, ps.building_area, ps.property_type,
                    ps.is_school_district, ps.school_tier, ps.initial_value as base_value,
                    ps.build_year,
-                   pm.owner_id, pm.status, pm.listed_price, pm.min_price, pm.current_valuation
+                   pm.owner_id, pm.status, pm.listed_price, pm.min_price, pm.current_valuation,
+                   pm.acquired_month
             FROM properties_static ps
             LEFT JOIN properties_market pm ON ps.property_id = pm.property_id
         """)
@@ -656,10 +668,10 @@ class MarketService:
         breach_penalty_total = float(breach_row[1] if breach_row and breach_row[1] is not None else 0.0)
 
         current_month_report = observed_month == month and month > 0
-        period_label = "本月" if current_month_report else "上月"
+        period_label = "本回合" if current_month_report else "上一回合"
 
         if observed_month == 0:
-            llm_analysis_text = "市场初始化完成，暂无历史数据可供分析。建议关注后续月份的市场动态。"
+            llm_analysis_text = "市场初始化完成，暂无历史数据可供分析。建议关注后续回合的市场动态。"
         else:
             # 开发商房产信息（如果有）
             dev_info = ""
@@ -673,7 +685,7 @@ class MarketService:
                 """
             
             base_stats = f"""
-            第{month}月市场数据（统计口径: {period_label}）：
+            第{month}回合市场数据（统计口径: {period_label}）：
             - 成交量: {transaction_count}套
             - 成交均价: {avg_price:,.0f}元
             - 📏 单位均价: {avg_unit_price:,.0f} 元/㎡ (环比 {unit_price_change_pct:+.1f}%)
@@ -681,7 +693,7 @@ class MarketService:
             - ⏳ 待交割库存: {orders_pending_settlement}
             - ✅ 交割完成: {settlements_completed}
             - ⚠️ 违约/过期: {breaches_count} (罚金合计 ¥{breach_penalty_total:,.0f})
-            - 🕒 平均交割时滞: {avg_settlement_lag_months:.2f} 个月
+            - 🕒 平均交割时滞: {avg_settlement_lag_months:.2f} 个周期
             - 🧠 聪明策略命中率: {match_metrics['smart_match_hit_rate'] * 100:.1f}% ({match_metrics['smart_match_selected']}/{match_metrics['smart_match_total']})
             - 🎚️ 学区权重平均变化: {match_metrics['avg_edu_weight_delta']:+.2f}
             - 🎚️ 价格敏感平均变化: {match_metrics['avg_price_sensitivity_delta']:+.2f}
@@ -699,7 +711,7 @@ class MarketService:
             - 🌊 抵押物流动性指数: A区 {float(match_metrics.get('zone_a_liquidity_index', 1.0)):.2f}, B区 {float(match_metrics.get('zone_b_liquidity_index', 1.0)):.2f}
             - A区热度: {zone_a_heat}
             - B区热度: {zone_b_heat}
-            - 趋势: {trend_signal} (连续 {abs(self.consecutive_trend)} 个月)
+            - 趋势: {trend_signal} (连续 {abs(self.consecutive_trend)} 个周期)
             - 政策新闻: {", ".join(extra_news) if extra_news else "无"}
             {dev_info}
             """
@@ -804,7 +816,7 @@ class MarketService:
         """
 
         result_text = f"""
-        【📊 市场公报 - 第{month}月】
+        【📊 市场公报 - 第{month}回合】
         ━━━━━━━━━━━━━━━━━━━━━━━
         📈 {period_label}成交: {transaction_count} 套
         💰 成交均价: ¥{avg_price:,.0f}
@@ -824,7 +836,10 @@ class MarketService:
         {llm_analysis_text.strip()}
 
         【🔔 政策动态】
-        {policy_news_str if policy_news_str else "本月无重大政策变动"}
+        {policy_news_str if policy_news_str else "本回合无重大政策变动"}
+        【ℹ️ 说明】
+        - 当前数据库位置: {self._database_path_hint()}
+        - 本项目里若看到“月份/month”，请理解为回合机制中的虚拟周期。
         ━━━━━━━━━━━━━━━━━━━━━━━
         """
 

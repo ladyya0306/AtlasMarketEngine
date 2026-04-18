@@ -8,8 +8,12 @@ __pycache__/
 env/
 venv/
 *.db
-results/
+results/*
+!results/supply_snapshot_catalog/
+!results/supply_snapshot_catalog/**
 log/
+logs/
+.ci-smoke/
 .DS_Store
 _archive/
 coverage/

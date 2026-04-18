@@ -90,7 +90,7 @@ def _read_completed_rounds_from_log(log_path: Path) -> int:
     if not log_path.exists():
         return 0
     text = log_path.read_text(encoding="utf-8", errors="ignore")
-    matches = re.findall(r"Month\s+(\d+)\s+Complete", text)
+    matches = re.findall(r"(?:Month|Round)\s+(\d+)\s+Complete", text)
     if not matches:
         return 0
     return max(int(item) for item in matches)

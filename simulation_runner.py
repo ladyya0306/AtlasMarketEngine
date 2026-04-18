@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import sqlite3
+import shutil
 import sys
 from typing import Any, Callable, Dict, List, Optional
 
@@ -107,7 +108,7 @@ class SimulationRunner:
 
         # Tier 5: Reporting Service (Market Bulletins, Final Reports)
         self.reporting_service = ReportingService(self.config, self.conn)
-        
+
         # Pending Interventions (Tier 5)
         self.pending_interventions = []
         self._applied_preplanned_interventions = set()
@@ -122,10 +123,93 @@ class SimulationRunner:
         self.final_summary = None
         self.intervention_history = []
         self.progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
-        
+
         # V3: Generate experiment metadata card
         if not self.resume:
             self.generate_experiment_card()
+
+    def _external_round_notice(self) -> str:
+        return "说明：本项目对外展示中的“回合”是虚拟市场周期；如果个别输出仍出现“月份/month”，也应按回合机制理解。"
+
+    def _external_db_notice(self) -> str:
+        return f"当前数据库位置：{self.db_path}"
+
+    def _log_external_runtime_notice(self) -> None:
+        logger.info(self._external_db_notice())
+        logger.info(self._external_round_notice())
+
+    def _checkpoint_root(self) -> str:
+        root = os.path.join(self._run_dir, "monthly_checkpoints")
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    def _checkpoint_dir(self, month: int) -> str:
+        path = os.path.join(self._checkpoint_root(), f"month_{int(month):02d}")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _write_month_checkpoint(self, month: int, summary: Optional[Dict[str, object]] = None) -> Dict[str, str]:
+        """
+        Persist a restartable round-end snapshot.
+        The checkpoint DB is a full SQLite backup taken only after a round has fully completed.
+        """
+        checkpoint_dir = self._checkpoint_dir(month)
+        checkpoint_db = os.path.join(checkpoint_dir, "simulation.db")
+        checkpoint_meta = os.path.join(checkpoint_dir, "checkpoint_meta.json")
+        checkpoint_status = os.path.join(checkpoint_dir, "status_snapshot.json")
+
+        self.conn.commit()
+        backup_conn = sqlite3.connect(checkpoint_db)
+        try:
+            self.conn.backup(backup_conn)
+        finally:
+            backup_conn.close()
+
+        payload = {
+            "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "run_dir": str(self._run_dir),
+            "source_db": str(self.db_path),
+            "checkpoint_db": str(checkpoint_db),
+            "completed_month": int(month),
+            "total_months": int(self.months),
+            "seed": int(self.seed),
+            "agent_count": int(self.agent_count),
+            "status": str(self.status),
+            "summary": dict(summary or {}),
+        }
+        with open(checkpoint_meta, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        with open(checkpoint_status, "w", encoding="utf-8") as f:
+            json.dump(self._build_status_snapshot(), f, ensure_ascii=False, indent=2)
+
+        for artifact_name in [
+            "metadata.json",
+            "parameter_assumption_report.md",
+            "parameter_assumption_report.json",
+            "simulation_run.log",
+        ]:
+            src = os.path.join(self._run_dir, artifact_name)
+            if os.path.exists(src):
+                try:
+                    shutil.copy2(src, os.path.join(checkpoint_dir, artifact_name))
+                except Exception:
+                    pass
+
+        latest_dir = os.path.join(self._checkpoint_root(), "latest")
+        try:
+            if os.path.exists(latest_dir):
+                shutil.rmtree(latest_dir, ignore_errors=True)
+            shutil.copytree(checkpoint_dir, latest_dir)
+        except Exception:
+            pass
+
+        logger.info(f"Round {int(month)} checkpoint saved: {checkpoint_db}")
+        return {
+            "checkpoint_dir": checkpoint_dir.replace("\\", "/"),
+            "checkpoint_db": checkpoint_db.replace("\\", "/"),
+            "checkpoint_meta": checkpoint_meta.replace("\\", "/"),
+        }
 
     def _parameter_assumption_artifact_paths(self) -> Dict[str, str]:
         return {
@@ -201,7 +285,7 @@ class SimulationRunner:
             },
             {
                 "parameter_key": "simulation.months",
-                "label": "模拟月数",
+                "label": "模拟回合数（虚拟周期）",
                 "current_value": int(self.months),
                 "parameter_category": "时间范围",
                 "source_category": "D",
@@ -360,8 +444,8 @@ class SimulationRunner:
                 "parameter_category": "干预方案",
                 "source_category": "C",
                 "source_explanation": "研究者预设实验动作。",
-                "why_set": "用于观察在特定月份注入人口、供给或收入冲击后的链式反应。",
-                "high_impact": "会明显改变局部月份的市场路径。",
+                "why_set": "用于观察在特定回合注入人口、供给或收入冲击后的链式反应。",
+                "high_impact": "会明显改变局部回合的市场路径。",
                 "low_impact": "更接近自然演化。",
                 "is_key": False,
                 "confidence": "高",
@@ -398,7 +482,7 @@ class SimulationRunner:
                 "parameter_category": "信息传播",
                 "source_category": "C",
                 "source_explanation": "当前实验已正式通过 smart_agent.info_delay_* 系列参数建模。",
-                "why_set": "用于研究市场公报与趋势信号晚到若干个月后，对买卖决策链的影响。",
+                "why_set": "用于研究市场公报与趋势信号晚到若干回合后，对买卖决策链的影响。",
                 "high_impact": "会放大延迟反应和错位行为。",
                 "low_impact": "会增加同步性和即时反馈。",
                 "is_key": True,
@@ -459,10 +543,11 @@ class SimulationRunner:
             f"- metadata.json: `{experiment['metadata_path']}`",
             f"- 生成时间: `{experiment['generated_at']}`",
             f"- Agent 数量: `{experiment['agent_count']}`",
-            f"- 模拟月数: `{experiment['months']}`",
+            f"- 模拟回合数: `{experiment['months']}`",
             f"- 随机种子: `{experiment['seed']}`",
             f"- 含夜跑预设干预: `{experiment['has_preplanned_interventions']}`",
             f"- 含运行期调整: `{experiment['has_runtime_adjustments']}`",
+            f"- {self._external_round_notice()}",
             "",
             "## 1. 参数总表（自动生成）",
             "",
@@ -680,7 +765,7 @@ class SimulationRunner:
                 "",
                 "## 2. Agent 明细（按成交笔数排序）",
                 "",
-                "| Agent ID | 姓名 | 主动机 | 成交笔数 | 成交总额 | 成交均价 | 成交月份 | 成交房产ID | 最近激活触发词 | 画像摘要 |",
+                "| Agent ID | 姓名 | 主动机 | 成交笔数 | 成交总额 | 成交均价 | 成交回合 | 成交房产ID | 最近激活触发词 | 画像摘要 |",
                 "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
             ]
         )
@@ -874,7 +959,7 @@ class SimulationRunner:
                     )
                     news = (
                         f"Preplanned intervention executed: developer supplied {int(result.get('count', count))} units "
-                        f"in Zone {zone} at month {month}."
+                        f"in Zone {zone} at round {month}."
                     )
                 elif action_type == "population_add":
                     count = int(plan.get("count", 0))
@@ -906,7 +991,7 @@ class SimulationRunner:
                     )
                     news = (
                         f"Preplanned intervention executed: added {int(result.get('added_count', count))} "
-                        f"{tier} agents at month {month}."
+                        f"{tier} agents at round {month}."
                     )
                 elif action_type == "income_shock":
                     pct_change = float(plan.get("pct_change")) if plan.get("pct_change") is not None else None
@@ -924,7 +1009,29 @@ class SimulationRunner:
                     )
                     news = (
                         "Preplanned intervention executed: income shock applied "
-                        f"at month {month}."
+                        f"at round {month}."
+                    )
+                elif action_type == "supply_cut":
+                    zone = str(plan.get("zone", "A")).upper()
+                    count = int(plan.get("count", 0))
+                    if zone not in ("A", "B") or count <= 0:
+                        logger.warning(f"Skip invalid preplanned supply_cut: {plan}")
+                        continue
+
+                    removed = int(self.intervention_service.supply_cut(self.market_service, count, zone))
+                    self._record_intervention(
+                        "SUPPLY_CUT_APPLIED",
+                        f"Removed {removed} active listings from zone {zone}",
+                        {
+                            "requested_count": int(count),
+                            "removed_count": int(removed),
+                            "zone": zone,
+                        },
+                        target_month_override=month,
+                    )
+                    news = (
+                        f"Preplanned intervention executed: removed {removed} active listings "
+                        f"in Zone {zone} at round {month}."
                     )
                 else:
                     logger.warning(f"Skip unsupported preplanned intervention action_type: {plan}")
@@ -1529,6 +1636,7 @@ class SimulationRunner:
     ) -> Dict[str, object]:
         normalized_count = int(count)
         normalized_zone = str(zone or "").strip().upper()
+        effective_month = int(target_month_override if target_month_override is not None else self.current_month)
         if normalized_count <= 0:
             raise ValueError("count must be greater than 0.")
         if normalized_zone not in {"A", "B"}:
@@ -1580,10 +1688,10 @@ class SimulationRunner:
                 school_units=school_units,
                 build_year=build_year,
                 config=self.config,
-                current_month=int(self.current_month),
+                current_month=effective_month,
             )
         )
-        self.developer_account_service.record_investment(injected_count, int(self.current_month))
+        self.developer_account_service.record_investment(injected_count, effective_month)
         property_ids = list(range(before_max_id + 1, before_max_id + injected_count + 1))
         history_entry = self._record_intervention(
             "DEVELOPER_SUPPLY_INJECTED",
@@ -1608,8 +1716,202 @@ class SimulationRunner:
             "school_units": int(school_units) if school_units is not None else None,
             "build_year": int(build_year) if build_year is not None else None,
             "history_entry": history_entry,
-            "generated_events": self._build_property_generated_events(property_ids, month=int(self.current_month), phase="system"),
-            "listed_events": self._build_property_listed_events(property_ids, month=int(self.current_month), phase="listing"),
+            "generated_events": self._build_property_generated_events(property_ids, month=effective_month, phase="system"),
+            "listed_events": self._build_property_listed_events(property_ids, month=effective_month, phase="listing"),
+        }
+
+    def supply_cut_intervention(
+        self,
+        *,
+        count: int,
+        zone: str,
+        target_month_override: Optional[int] = None,
+    ) -> Dict[str, object]:
+        normalized_count = int(count)
+        normalized_zone = str(zone or "").strip().upper()
+        effective_month = int(target_month_override if target_month_override is not None else self.current_month)
+        if normalized_count <= 0:
+            raise ValueError("count must be greater than 0.")
+        if normalized_zone not in {"A", "B"}:
+            raise ValueError("zone must be either A or B.")
+
+        removed = int(self.intervention_service.supply_cut(self.market_service, normalized_count, normalized_zone))
+        history_entry = self._record_intervention(
+            "SUPPLY_CUT_APPLIED",
+            f"Removed {removed} active listings from zone {normalized_zone}",
+            {
+                "count": removed,
+                "requested_count": normalized_count,
+                "zone": normalized_zone,
+            },
+            target_month_override=target_month_override,
+        )
+        return {
+            "removed_count": removed,
+            "zone": normalized_zone,
+            "history_entry": history_entry,
+        }
+
+    @staticmethod
+    def _derive_supply_bucket_from_row(row: Dict[str, object]) -> str:
+        zone_bucket = str(row.get("zone", "") or "UNK").upper()
+        school_bucket = "SCHOOL" if bool(row.get("is_school_district", False)) else "NOSCHOOL"
+        property_type = str(row.get("property_type", "") or "").lower()
+        area = float(row.get("building_area", 0.0) or 0.0)
+        if any(token in property_type for token in ("villa", "improve", "改善", "大平层")):
+            demand_bucket = "IMPROVE"
+        elif any(token in property_type for token in ("small", "刚需", "compact", "studio")):
+            demand_bucket = "JUST"
+        else:
+            demand_bucket = "IMPROVE" if area >= 110.0 else "JUST"
+        return f"{zone_bucket}_{school_bucket}_{demand_bucket}"
+
+    def force_listing_intervention(
+        self,
+        *,
+        count: int,
+        bucket_id: Optional[str] = None,
+        zone: Optional[str] = None,
+        target_month_override: Optional[int] = None,
+    ) -> Dict[str, object]:
+        normalized_count = int(count)
+        effective_month = int(target_month_override if target_month_override is not None else self.current_month)
+        if normalized_count <= 0:
+            raise ValueError("count must be greater than 0.")
+        normalized_bucket = str(bucket_id or "").strip().upper()
+        normalized_zone = str(zone or "").strip().upper()
+        holding_lock_months = max(1, int(self.config.get("market.min_holding_months_before_resale", 12) or 12))
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT
+                    pm.property_id,
+                    pm.owner_id,
+                    pm.status,
+                    pm.current_valuation,
+                    pm.acquired_month,
+                    ps.zone,
+                    ps.is_school_district,
+                    ps.property_type,
+                    ps.building_area
+                FROM properties_market pm
+                JOIN properties_static ps ON ps.property_id = pm.property_id
+                WHERE pm.status = 'off_market'
+                  AND pm.owner_id > 0
+                ORDER BY pm.property_id
+                """
+            )
+        except sqlite3.OperationalError:
+            cursor.execute(
+                """
+                SELECT
+                    pm.property_id,
+                    pm.owner_id,
+                    pm.status,
+                    pm.current_valuation,
+                    0 AS acquired_month,
+                    ps.zone,
+                    ps.is_school_district,
+                    ps.property_type,
+                    ps.building_area
+                FROM properties_market pm
+                JOIN properties_static ps ON ps.property_id = pm.property_id
+                WHERE pm.status = 'off_market'
+                  AND pm.owner_id > 0
+                ORDER BY pm.property_id
+                """
+            )
+        eligible_rows = []
+        for row in cursor.fetchall() or []:
+            row_dict = {
+                "property_id": int(row[0] or 0),
+                "owner_id": int(row[1] or 0),
+                "status": str(row[2] or ""),
+                "current_valuation": float(row[3] or 0.0),
+                "acquired_month": int(row[4] or 0) if row[4] is not None else 0,
+                "zone": str(row[5] or ""),
+                "is_school_district": bool(row[6]),
+                "property_type": str(row[7] or ""),
+                "building_area": float(row[8] or 0.0),
+            }
+            acquired_month = int(row_dict.get("acquired_month", 0) or 0)
+            if acquired_month > 0 and (effective_month - acquired_month) < holding_lock_months:
+                continue
+            derived_bucket = self._derive_supply_bucket_from_row(row_dict)
+            row_dict["bucket_id"] = derived_bucket
+            if normalized_bucket and derived_bucket != normalized_bucket:
+                continue
+            if normalized_zone and str(row_dict.get("zone", "") or "").upper() != normalized_zone:
+                continue
+            eligible_rows.append(row_dict)
+
+        selected_rows = eligible_rows[:normalized_count]
+        if not selected_rows:
+            return {
+                "listed_count": 0,
+                "bucket_id": normalized_bucket or None,
+                "zone": normalized_zone or None,
+                "history_entry": self._record_intervention(
+                    "FORCED_LISTING_APPLIED",
+                    "Forced listing requested but no eligible off-market owner properties matched.",
+                    {
+                        "listed_count": 0,
+                        "bucket_id": normalized_bucket or None,
+                        "zone": normalized_zone or None,
+                    },
+                    target_month_override=target_month_override,
+                ),
+                "listed_events": [],
+            }
+
+        updates = []
+        property_ids = []
+        for item in selected_rows:
+            property_id = int(item["property_id"])
+            property_ids.append(property_id)
+            valuation = float(item.get("current_valuation", 0.0) or 0.0)
+            listed_price = valuation * 1.01 if valuation > 0 else 0.0
+            min_price = listed_price * 0.93 if listed_price > 0 else 0.0
+            updates.append(
+                (
+                    listed_price,
+                    min_price,
+                    effective_month,
+                    property_id,
+                )
+            )
+        cursor.executemany(
+            """
+            UPDATE properties_market
+            SET status='for_sale',
+                listed_price=?,
+                min_price=?,
+                listing_month=?,
+                last_price_update_reason='FORCED_LISTING_INTERVENTION'
+            WHERE property_id=?
+            """,
+            updates,
+        )
+        self.conn.commit()
+
+        history_entry = self._record_intervention(
+            "FORCED_LISTING_APPLIED",
+            f"Forced listed {len(property_ids)} owner-held properties" + (f" in {normalized_bucket}" if normalized_bucket else ""),
+            {
+                "listed_count": len(property_ids),
+                "bucket_id": normalized_bucket or None,
+                "zone": normalized_zone or None,
+                "property_ids": list(property_ids),
+            },
+            target_month_override=target_month_override,
+        )
+        return {
+            "listed_count": len(property_ids),
+            "bucket_id": normalized_bucket or None,
+            "zone": normalized_zone or None,
+            "history_entry": history_entry,
+            "listed_events": self._build_property_listed_events(property_ids, month=effective_month, phase="listing"),
         }
 
     def get_final_summary(self) -> Dict[str, object]:
@@ -1749,6 +2051,10 @@ class SimulationRunner:
                 "completed_at": self.completed_at,
                 "last_error": self.last_error,
             },
+            "public_notes": {
+                "db_path": str(self.db_path),
+                "round_interpretation": self._external_round_notice(),
+            },
             "artifacts": {
                 "parameter_assumption_markdown": self._parameter_assumption_artifact_paths()["markdown_path"].replace("\\", "/"),
                 "parameter_assumption_json": self._parameter_assumption_artifact_paths()["json_path"].replace("\\", "/"),
@@ -1858,6 +2164,188 @@ class SimulationRunner:
             "key_properties": key_properties,
             "failure_reasons": failure_reasons,
             "interventions": [item for item in self.intervention_history if int(item.get("month", -1)) == target_month],
+        }
+
+    @staticmethod
+    def _bucket_display_label(bucket_id: str) -> str:
+        parts = [segment.strip().upper() for segment in str(bucket_id or "").split("_") if segment.strip()]
+        if len(parts) >= 3 and parts[0] in {"A", "B"}:
+            zone = f"{parts[0]}区"
+            school = "学区" if parts[1] == "SCHOOL" else "非学区"
+            demand = "刚需" if parts[2] == "JUST" else "改善"
+            return f"{zone}/{school}/{demand}"
+        return str(bucket_id or "未识别画像")
+
+    def _build_round_supply_review(self, month: int) -> Dict[str, object]:
+        if not self.conn:
+            return {
+                "round": int(month),
+                "hot_buckets": [],
+                "cold_buckets": [],
+                "shortage_buckets": [],
+                "no_active_listing_rows": 0,
+                "should_pause": False,
+                "signal_reasons": [],
+            }
+
+        target_month = int(month)
+        cursor = self.conn.cursor()
+
+        hot_buckets: List[Dict[str, object]] = []
+        cursor.execute(
+            """
+            SELECT
+                COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') AS bucket_id,
+                COUNT(DISTINCT CASE WHEN final_outcome IN ('FILLED', 'PENDING_SETTLEMENT') THEN property_id END) AS sold_props,
+                SUM(CASE WHEN is_valid_bid = 1 THEN 1 ELSE 0 END) AS valid_bids,
+                SUM(CASE WHEN proceeded_to_negotiation = 1 THEN 1 ELSE 0 END) AS negotiations,
+                COUNT(DISTINCT CASE
+                    WHEN COALESCE(json_extract(match_context, '$.shortlist_item.heat_state.real_competition_score'), 0) > 0
+                    THEN property_id END
+                ) AS real_comp_props
+            FROM property_buyer_matches
+            WHERE month = ?
+              AND COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') != ''
+            GROUP BY COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '')
+            HAVING sold_props > 0 OR valid_bids > 0 OR real_comp_props > 0
+            ORDER BY sold_props DESC, real_comp_props DESC, valid_bids DESC
+            LIMIT 6
+            """,
+            (target_month,),
+        )
+        for row in cursor.fetchall() or []:
+            bucket_id = str(row[0] or "").strip()
+            hot_buckets.append(
+                {
+                    "bucket_id": bucket_id,
+                    "label": self._bucket_display_label(bucket_id),
+                    "sold_props": int(row[1] or 0),
+                    "valid_bids": int(row[2] or 0),
+                    "negotiations": int(row[3] or 0),
+                    "real_comp_props": int(row[4] or 0),
+                }
+            )
+
+        shortage_buckets: List[Dict[str, object]] = []
+        cursor.execute(
+            """
+            SELECT
+                COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') AS bucket_id,
+                COUNT(*) AS no_active_rows,
+                COUNT(DISTINCT buyer_id) AS waiting_buyers
+            FROM property_buyer_matches
+            WHERE month = ?
+              AND failure_reason = 'NO_ACTIVE_LISTINGS'
+              AND COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') != ''
+            GROUP BY COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '')
+            ORDER BY no_active_rows DESC, waiting_buyers DESC
+            LIMIT 6
+            """,
+            (target_month,),
+        )
+        for row in cursor.fetchall() or []:
+            bucket_id = str(row[0] or "").strip()
+            shortage_buckets.append(
+                {
+                    "bucket_id": bucket_id,
+                    "label": self._bucket_display_label(bucket_id),
+                    "no_active_rows": int(row[1] or 0),
+                    "waiting_buyers": int(row[2] or 0),
+                }
+            )
+
+        cursor.execute(
+            """
+            SELECT property_id,
+                   SUM(CASE WHEN is_valid_bid = 1 THEN 1 ELSE 0 END) AS valid_bids,
+                   MAX(CASE WHEN final_outcome IN ('FILLED', 'PENDING_SETTLEMENT') THEN 1 ELSE 0 END) AS sold_flag
+            FROM property_buyer_matches
+            WHERE month = ?
+            GROUP BY property_id
+            """,
+            (target_month,),
+        )
+        property_activity: Dict[int, Dict[str, int]] = {
+            int(row[0]): {
+                "valid_bids": int(row[1] or 0),
+                "sold_flag": int(row[2] or 0),
+            }
+            for row in cursor.fetchall() or []
+            if row[0] is not None
+        }
+
+        cursor.execute(
+            """
+            SELECT pm.property_id, ps.zone, ps.is_school_district, ps.property_type, ps.building_area
+            FROM properties_market pm
+            JOIN properties_static ps ON ps.property_id = pm.property_id
+            WHERE pm.status = 'for_sale'
+            """
+        )
+        cold_stats: Dict[str, Dict[str, object]] = {}
+        for row in cursor.fetchall() or []:
+            row_dict = {
+                "property_id": int(row[0] or 0),
+                "zone": str(row[1] or ""),
+                "is_school_district": bool(row[2]),
+                "property_type": str(row[3] or ""),
+                "building_area": float(row[4] or 0.0),
+            }
+            bucket_id = self._derive_supply_bucket_from_row(row_dict)
+            activity = property_activity.get(int(row_dict["property_id"]), {})
+            if int(activity.get("sold_flag", 0) or 0) > 0:
+                continue
+            if int(activity.get("valid_bids", 0) or 0) > 0:
+                continue
+            current = cold_stats.get(
+                bucket_id,
+                {
+                    "bucket_id": bucket_id,
+                    "label": self._bucket_display_label(bucket_id),
+                    "active_listings": 0,
+                    "stale_like_listings": 0,
+                },
+            )
+            current["active_listings"] = int(current["active_listings"]) + 1
+            current["stale_like_listings"] = int(current["stale_like_listings"]) + 1
+            cold_stats[bucket_id] = current
+        cold_buckets = sorted(
+            cold_stats.values(),
+            key=lambda item: (int(item["stale_like_listings"]), int(item["active_listings"]), item["bucket_id"]),
+            reverse=True,
+        )[:6]
+
+        current_tx = 0
+        previous_tx = 0
+        try:
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE month = ?", (target_month,))
+            current_tx = int((cursor.fetchone() or [0])[0] or 0)
+            if target_month > 1:
+                cursor.execute("SELECT COUNT(*) FROM transactions WHERE month = ?", (target_month - 1,))
+                previous_tx = int((cursor.fetchone() or [0])[0] or 0)
+        except Exception:
+            current_tx = 0
+            previous_tx = 0
+
+        total_no_active_rows = int(sum(int(item.get("no_active_rows", 0) or 0) for item in shortage_buckets))
+        signal_reasons: List[str] = []
+        if total_no_active_rows >= 8:
+            signal_reasons.append(f"NO_ACTIVE_LISTINGS 较高（{total_no_active_rows}）")
+        if target_month > 1 and previous_tx > 0 and current_tx <= max(1, int(round(previous_tx * 0.5))):
+            signal_reasons.append(f"成交从上回合 {previous_tx} 降到 {current_tx}")
+        if shortage_buckets and len(hot_buckets) <= max(1, len(shortage_buckets) // 2):
+            signal_reasons.append("热度集中于少数画像，缺口桶开始扩大")
+
+        return {
+            "round": target_month,
+            "transactions": int(current_tx),
+            "previous_transactions": int(previous_tx),
+            "hot_buckets": hot_buckets,
+            "cold_buckets": cold_buckets,
+            "shortage_buckets": shortage_buckets,
+            "no_active_listing_rows": int(total_no_active_rows),
+            "should_pause": bool(signal_reasons),
+            "signal_reasons": signal_reasons,
         }
 
     def get_month_average_transaction_price(self, month: int) -> float:
@@ -2723,8 +3211,8 @@ class SimulationRunner:
         return events
 
     def _run_month(self, month: int, allow_intervention_panel: bool = False) -> Dict[str, object]:
-        logger.info(f"--- Month {month} ---")
-        self._emit_progress("month_start", f"开始推进第 {month} 月", month, {"phase": "month_start"})
+        logger.info(f"--- Round {month} ---")
+        self._emit_progress("month_start", f"开始推进第 {month} 回合", month, {"phase": "month_start"})
 
         # Initialize Loggers
         log_dir = os.path.dirname(self.db_path)
@@ -2900,14 +3388,15 @@ class SimulationRunner:
         )
         bulletin = self.last_bulletin
 
-        logger.info(f"Month {month} Complete. Transactions: {tx_count}, Failed Negs: {fail_count}")
+        logger.info(f"Round {month} Complete. Transactions: {tx_count}, Failed Negs: {fail_count}")
 
-        if allow_intervention_panel and self._should_show_intervention_panel():
-            self._intervention_panel(month)
+        round_supply_review = self._build_round_supply_review(month)
+        if allow_intervention_panel and self._should_show_intervention_panel() and bool(round_supply_review.get("should_pause", False)):
+            self._intervention_panel(month, round_supply_review)
         else:
             logger.info("Intervention panel skipped (non-interactive or disabled by config).")
 
-        self._emit_progress("summary", "正在汇总月度结果", month, {"phase": "summary"})
+        self._emit_progress("summary", "正在汇总回合结果", month, {"phase": "summary"})
         bulletin_excerpt = " ".join(str(bulletin).split())[:240]
         avg_transaction_price = self.get_month_average_transaction_price(month)
         summary = {
@@ -2921,10 +3410,11 @@ class SimulationRunner:
             "event_count": int(len(self.get_month_events(month))),
             "controls_snapshot": self.get_runtime_controls(),
             "month_review": self.get_month_review(month),
+            "round_supply_review": round_supply_review,
         }
         self.last_month_summary = summary
         self.write_parameter_assumption_report()
-        self._emit_progress("month_end", f"第 {month} 月结果已生成", month, {"phase": "month_end", "summary": summary})
+        self._emit_progress("month_end", f"第 {month} 回合结果已生成", month, {"phase": "month_end", "summary": summary})
         return summary
 
     def run_one_month(self) -> Dict[str, object]:
@@ -2940,10 +3430,14 @@ class SimulationRunner:
         next_month = self.current_month + 1
         self.status = "running"
         self.last_error = None
+        self._log_external_runtime_notice()
 
         try:
             summary = self._run_month(next_month, allow_intervention_panel=False)
             self.current_month = next_month
+            checkpoint_info = self._write_month_checkpoint(self.current_month, summary)
+            summary = dict(summary or {})
+            summary["checkpoint"] = checkpoint_info
 
             if self.current_month >= self.months:
                 self.status = "completed"
@@ -2961,39 +3455,351 @@ class SimulationRunner:
             logger.error(f"Simulation Error at month {next_month}: {e}")
             raise
 
-    def _intervention_panel(self, month: int):
-        """V3 月末CLI干预面板：玩家投放房产、调控人口、查看报告"""
-        print("\n" + "="*60)
-        print(f"  🎮 第 {month} 月结束 - 大盘上帝干预面板")
-        print("="*60)
-        
+    def _bucket_defaults_for_intervention(self, bucket_id: str, count: int) -> Dict[str, object]:
+        normalized_bucket = str(bucket_id or "").strip().upper()
+        parts = [segment.strip().upper() for segment in normalized_bucket.split("_") if segment.strip()]
+        zone = parts[0] if parts and parts[0] in {"A", "B"} else "B"
+        school = parts[1] if len(parts) > 1 else "NOSCHOOL"
+        demand = parts[2] if len(parts) > 2 else "JUST"
+        total_units = max(1, int(count))
+        base_year = int(self.config.get("simulation.base_year", 2026) or 2026)
+
+        defaults = {
+            ("A", "SCHOOL", "JUST"): {"price_per_sqm": 43800.0, "size": 88.0, "school_units": total_units},
+            ("A", "SCHOOL", "IMPROVE"): {"price_per_sqm": 52000.0, "size": 118.0, "school_units": total_units},
+            ("A", "NOSCHOOL", "JUST"): {"price_per_sqm": 36000.0, "size": 86.0, "school_units": 0},
+            ("A", "NOSCHOOL", "IMPROVE"): {"price_per_sqm": 43200.0, "size": 116.0, "school_units": 0},
+            ("B", "SCHOOL", "JUST"): {"price_per_sqm": 22600.0, "size": 84.0, "school_units": total_units},
+            ("B", "SCHOOL", "IMPROVE"): {"price_per_sqm": 28600.0, "size": 108.0, "school_units": total_units},
+            ("B", "NOSCHOOL", "JUST"): {"price_per_sqm": 18000.0, "size": 82.0, "school_units": 0},
+            ("B", "NOSCHOOL", "IMPROVE"): {"price_per_sqm": 22800.0, "size": 106.0, "school_units": 0},
+        }
+        resolved = defaults.get((zone, school, demand), defaults[("B", "NOSCHOOL", "JUST")])
+        if (zone, school, demand) == ("A", "SCHOOL", "IMPROVE"):
+            template = "a_district_premium"
+        elif (zone, school, demand) == ("B", "NOSCHOOL", "JUST"):
+            template = "b_entry_level"
+        else:
+            template = "mixed_balanced"
+        return {
+            "bucket_id": normalized_bucket,
+            "label": self._bucket_display_label(normalized_bucket),
+            "zone": zone,
+            "template": template,
+            "count": total_units,
+            "price_per_sqm": float(resolved["price_per_sqm"]),
+            "size": float(resolved["size"]),
+            "school_units": int(resolved["school_units"]),
+            "build_year": base_year,
+        }
+
+    def _print_round_supply_review(self, review: Optional[Dict[str, object]]) -> None:
+        review = dict(review or {})
+        current_round = int(review.get("round", 0) or 0)
+        print("\n" + "=" * 72)
+        print(f"  第 {current_round} 回合结束 - 供给续航复盘（回合=虚拟市场周期，不等同现实自然月）")
+        print("=" * 72)
+        print(
+            "  本回合成交: {0} | 上回合成交: {1} | NO_ACTIVE_LISTINGS: {2}".format(
+                int(review.get("transactions", 0) or 0),
+                int(review.get("previous_transactions", 0) or 0),
+                int(review.get("no_active_listing_rows", 0) or 0),
+            )
+        )
+        signal_reasons = list(review.get("signal_reasons") or [])
+        if signal_reasons:
+            print("  触发信号:")
+            for reason in signal_reasons:
+                print(f"    - {reason}")
+
+        hot_buckets = list(review.get("hot_buckets") or [])
+        cold_buckets = list(review.get("cold_buckets") or [])
+        shortage_buckets = list(review.get("shortage_buckets") or [])
+
+        print("\n  热销画像:")
+        if hot_buckets:
+            for item in hot_buckets:
+                print(
+                    "    - {label}: 成交 {sold_props} 套 / 有效出价 {valid_bids} / 进入谈判 {negotiations} / 真竞争房源 {real_comp_props}".format(
+                        **item
+                    )
+                )
+        else:
+            print("    - 暂无明显热销画像")
+
+        print("\n  缺口画像:")
+        if shortage_buckets:
+            for item in shortage_buckets:
+                print(
+                    "    - {label}: NO_ACTIVE_LISTINGS {no_active_rows} / 等待买家 {waiting_buyers}".format(
+                        **item
+                    )
+                )
+        else:
+            print("    - 暂无明显缺口画像")
+
+        print("\n  偏冷画像:")
+        if cold_buckets:
+            for item in cold_buckets:
+                print(
+                    "    - {label}: 在售 {active_listings} / 类尾盘 {stale_like_listings}".format(
+                        **item
+                    )
+                )
+        else:
+            print("    - 暂无明显偏冷画像")
+
+    def _auto_supply_supplement(self, month: int, review: Dict[str, object]) -> List[Dict[str, object]]:
+        shortage_buckets = list(review.get("shortage_buckets") or [])
+        hot_buckets = list(review.get("hot_buckets") or [])
+        targets = shortage_buckets[:2] if shortage_buckets else hot_buckets[:2]
+        applied: List[Dict[str, object]] = []
+        for item in targets:
+            bucket_id = str(item.get("bucket_id") or "").strip().upper()
+            if not bucket_id:
+                continue
+            pressure = max(
+                int(item.get("waiting_buyers", 0) or 0),
+                int(item.get("no_active_rows", 0) or 0),
+                int(item.get("sold_props", 0) or 0),
+            )
+            planned_count = max(1, min(8, int(round(max(1, pressure) * 0.5))))
+            defaults = self._bucket_defaults_for_intervention(bucket_id, planned_count)
+            result = self.inject_developer_supply_intervention(
+                count=int(defaults["count"]),
+                zone=str(defaults["zone"]),
+                template=str(defaults["template"]),
+                price_per_sqm=float(defaults["price_per_sqm"]),
+                size=float(defaults["size"]),
+                school_units=int(defaults["school_units"]),
+                build_year=int(defaults["build_year"]),
+                target_month_override=month,
+            )
+            applied.append(
+                {
+                    "bucket_id": bucket_id,
+                    "label": defaults["label"],
+                    "count": int(result.get("count", defaults["count"]) or defaults["count"]),
+                    "zone": str(defaults["zone"]),
+                    "template": str(defaults["template"]),
+                }
+            )
+        if applied:
+            self._record_intervention(
+                "ROUND_AUTO_SUPPLEMENT",
+                f"Auto supplemented {sum(int(item['count']) for item in applied)} units across {len(applied)} buckets.",
+                {"applied": applied},
+                target_month_override=month,
+            )
+        return applied
+
+    def _full_supply_replenish(self, month: int, review: Dict[str, object]) -> List[Dict[str, object]]:
+        shortage_buckets = list(review.get("shortage_buckets") or [])
+        hot_buckets = list(review.get("hot_buckets") or [])
+        ranked_targets = shortage_buckets if shortage_buckets else hot_buckets
+        applied: List[Dict[str, object]] = []
+        for item in ranked_targets[:4]:
+            bucket_id = str(item.get("bucket_id") or "").strip().upper()
+            if not bucket_id:
+                continue
+            pressure = max(
+                int(item.get("waiting_buyers", 0) or 0),
+                int(item.get("no_active_rows", 0) or 0),
+                int(item.get("sold_props", 0) or 0),
+            )
+            planned_count = max(2, min(12, pressure if pressure > 0 else 4))
+            defaults = self._bucket_defaults_for_intervention(bucket_id, planned_count)
+            result = self.inject_developer_supply_intervention(
+                count=int(defaults["count"]),
+                zone=str(defaults["zone"]),
+                template=str(defaults["template"]),
+                price_per_sqm=float(defaults["price_per_sqm"]),
+                size=float(defaults["size"]),
+                school_units=int(defaults["school_units"]),
+                build_year=int(defaults["build_year"]),
+                target_month_override=month,
+            )
+            applied.append(
+                {
+                    "bucket_id": bucket_id,
+                    "label": defaults["label"],
+                    "count": int(result.get("count", defaults["count"]) or defaults["count"]),
+                    "zone": str(defaults["zone"]),
+                    "template": str(defaults["template"]),
+                }
+            )
+        if applied:
+            self._record_intervention(
+                "ROUND_FULL_REPLENISH",
+                f"Full replenish injected {sum(int(item['count']) for item in applied)} units across {len(applied)} buckets.",
+                {"applied": applied},
+                target_month_override=month,
+            )
+        return applied
+
+    def _intervention_panel(self, month: int, review: Optional[Dict[str, object]] = None):
+        """Round-end CLI intervention panel for player-driven supply continuity decisions."""
+        current_review = dict(review or self._build_round_supply_review(month) or {})
+        self._print_round_supply_review(current_review)
+
         while True:
             print("\n请选择操作：")
-            print("  1. 📦 强行投放新楼盘 (开发商)")
-            print("  2. 👥 注入外来人口 (增加刚需买家)")
-            print("  3. 🚪 人口流失 (移除部分底层/中产)")
-            print("  4. 📊 查看开发商账户报告")
-            print("  5. ⏩ 继续下一月")
-            print("-" * 60)
-            
+            print("  1. 查看回合复盘")
+            print("  2. 定向增供")
+            print("  3. 自动补供（按缺口桶）")
+            print("  4. 全量补充（放大所有缺口桶）")
+            print("  5. 减供或强制挂牌")
+            print("  6. 查看开发商账户报告")
+            print("  7. 继续下一回合")
+            print("-" * 72)
+
             try:
-                choice = input("输入选项 (1-5): ").strip()
-                
+                choice = input("输入选项 (1-7): ").strip()
+
                 if choice == "1":
-                    self._invest_properties(month)
+                    self._print_round_supply_review(current_review)
                 elif choice == "2":
-                    self._adjust_population(is_add=True)
+                    candidate_map: List[Dict[str, object]] = []
+                    seen_buckets = set()
+                    for group_name, items in (
+                        ("缺口", current_review.get("shortage_buckets") or []),
+                        ("热销", current_review.get("hot_buckets") or []),
+                        ("偏冷", current_review.get("cold_buckets") or []),
+                    ):
+                        for item in items:
+                            bucket_id = str(item.get("bucket_id") or "").strip().upper()
+                            if not bucket_id or bucket_id in seen_buckets:
+                                continue
+                            seen_buckets.add(bucket_id)
+                            candidate_map.append(
+                                {
+                                    "group": group_name,
+                                    "bucket_id": bucket_id,
+                                    "label": self._bucket_display_label(bucket_id),
+                                }
+                            )
+                    if candidate_map:
+                        print("\n可选画像桶：")
+                        for idx, item in enumerate(candidate_map, start=1):
+                            print(f"  {idx}. [{item['group']}] {item['label']} ({item['bucket_id']})")
+                        selected = input("选择画像桶编号（回车默认 1，可直接输入 bucket_id）: ").strip()
+                        chosen_bucket = ""
+                        if not selected:
+                            chosen_bucket = str(candidate_map[0]["bucket_id"])
+                        elif selected.isdigit() and 1 <= int(selected) <= len(candidate_map):
+                            chosen_bucket = str(candidate_map[int(selected) - 1]["bucket_id"])
+                        else:
+                            chosen_bucket = selected.upper()
+                    else:
+                        chosen_bucket = input("输入目标画像桶（例：B_NOSCHOOL_JUST）: ").strip().upper()
+                    if not chosen_bucket:
+                        print("⚠️ 未选择画像桶，已取消定向增供。")
+                        continue
+                    default_count = 4
+                    for item in current_review.get("shortage_buckets") or []:
+                        if str(item.get("bucket_id") or "").strip().upper() == chosen_bucket:
+                            default_count = max(
+                                2,
+                                min(
+                                    12,
+                                    max(
+                                        int(item.get("waiting_buyers", 0) or 0),
+                                        int(item.get("no_active_rows", 0) or 0),
+                                    ),
+                                ),
+                            )
+                            break
+                    count_raw = input(f"增供数量 [默认 {default_count}]: ").strip()
+                    planned_count = int(count_raw) if count_raw else int(default_count)
+                    defaults = self._bucket_defaults_for_intervention(chosen_bucket, planned_count)
+                    print(
+                        "\n定向增供预览: {label} / {count} 套 / zone={zone} / template={template} / 单价={price_per_sqm:.0f} / 面积={size:.0f} / 学区套数={school_units}".format(
+                            **defaults
+                        )
+                    )
+                    if input("确认执行？(y/n): ").strip().lower() != "y":
+                        print("已取消定向增供。")
+                        continue
+                    result = self.inject_developer_supply_intervention(
+                        count=int(defaults["count"]),
+                        zone=str(defaults["zone"]),
+                        template=str(defaults["template"]),
+                        price_per_sqm=float(defaults["price_per_sqm"]),
+                        size=float(defaults["size"]),
+                        school_units=int(defaults["school_units"]),
+                        build_year=int(defaults["build_year"]),
+                        target_month_override=month,
+                    )
+                    print(f"✅ 已增供 {int(result.get('count', 0) or 0)} 套，目标画像 {defaults['label']}。")
+                    current_review = self._build_round_supply_review(month)
                 elif choice == "3":
-                    self._adjust_population(is_add=False)
+                    applied = self._auto_supply_supplement(month, current_review)
+                    if applied:
+                        print("✅ 已按缺口自动补供：")
+                        for item in applied:
+                            print(f"  - {item['label']}: {item['count']} 套 / zone={item['zone']} / template={item['template']}")
+                    else:
+                        print("⚠️ 当前没有可自动补供的明显缺口桶。")
+                    current_review = self._build_round_supply_review(month)
                 elif choice == "4":
-                    self.developer_account_service.show_report(month)
+                    applied = self._full_supply_replenish(month, current_review)
+                    if applied:
+                        print("✅ 已执行全量补充：")
+                        for item in applied:
+                            print(f"  - {item['label']}: {item['count']} 套 / zone={item['zone']} / template={item['template']}")
+                    else:
+                        print("⚠️ 当前没有可全量补充的目标桶。")
+                    current_review = self._build_round_supply_review(month)
                 elif choice == "5":
+                    print("\n请选择供给侧调控动作：")
+                    print("  1. 减供（撤下当前在售房源）")
+                    print("  2. 强制挂牌（把业主持有的 off-market 房源挂出来）")
+                    sub_choice = input("输入选项 (1-2): ").strip()
+                    if sub_choice == "1":
+                        zone = input("目标区域 (A/B) [默认 A]: ").strip().upper() or "A"
+                        count_raw = input("减供数量 [默认 5]: ").strip()
+                        planned_count = int(count_raw) if count_raw else 5
+                        result = self.supply_cut_intervention(count=planned_count, zone=zone, target_month_override=month)
+                        print(f"✅ 已从 {zone} 区撤下 {int(result.get('removed_count', 0) or 0)} 套在售房源。")
+                    elif sub_choice == "2":
+                        shortage = list(current_review.get("shortage_buckets") or [])
+                        chosen_bucket = ""
+                        if shortage:
+                            print("\n优先缺口桶：")
+                            for idx, item in enumerate(shortage, start=1):
+                                print(f"  {idx}. {item['label']} ({item['bucket_id']})")
+                            bucket_choice = input("选择目标画像桶编号（回车默认 1，可留空仅按区域）: ").strip()
+                            if not bucket_choice:
+                                chosen_bucket = str(shortage[0].get("bucket_id") or "")
+                            elif bucket_choice.isdigit() and 1 <= int(bucket_choice) <= len(shortage):
+                                chosen_bucket = str(shortage[int(bucket_choice) - 1].get("bucket_id") or "")
+                            else:
+                                chosen_bucket = bucket_choice.upper()
+                        zone = input("目标区域 (A/B，可留空): ").strip().upper()
+                        count_raw = input("强制挂牌数量 [默认 3]: ").strip()
+                        planned_count = int(count_raw) if count_raw else 3
+                        result = self.force_listing_intervention(
+                            count=planned_count,
+                            bucket_id=chosen_bucket or None,
+                            zone=zone or None,
+                            target_month_override=month,
+                        )
+                        print(
+                            f"✅ 已强制挂牌 {int(result.get('listed_count', 0) or 0)} 套业主持有房源。"
+                            + (f" 目标桶={chosen_bucket}" if chosen_bucket else "")
+                        )
+                    else:
+                        print("❌ 无效选项。")
+                    current_review = self._build_round_supply_review(month)
+                elif choice == "6":
+                    self.developer_account_service.show_report(month)
+                elif choice == "7":
                     print("\n✅ 继续模拟...\n")
                     break
                 else:
-                    print("❌ 无效选项，请输入 1-5")
+                    print("❌ 无效选项，请输入 1-7")
             except KeyboardInterrupt:
-                print("\n\n⚠️ 用户中断，退出干预面板")
+                print("\n\n⚠️ 用户中断，退出干预面板。")
                 break
             except EOFError:
                 logger.warning("干预面板输入流结束（EOF），自动退出面板。")
@@ -3125,13 +3931,18 @@ class SimulationRunner:
         self.initialize()
         start_month = self.current_month
         self.status = "running"
-        logger.info(f"Starting Simulation: {self.months} Months (From {start_month + 1} to {self.months})")
+        self._log_external_runtime_notice()
+        logger.info(
+            f"Starting Simulation: {self.months} Rounds (virtual cycles) "
+            f"(From {start_month + 1} to {self.months})"
+        )
 
         try:
             while self.current_month < self.months:
                 next_month = self.current_month + 1
-                self._run_month(next_month, allow_intervention_panel=allow_intervention_panel)
+                summary = self._run_month(next_month, allow_intervention_panel=allow_intervention_panel)
                 self.current_month = next_month
+                self._write_month_checkpoint(self.current_month, summary)
 
             # --- Phase 10: End-of-Run Reporting ---
             enable_end_reports = bool(self.config.get("reporting.enable_end_reports", True))

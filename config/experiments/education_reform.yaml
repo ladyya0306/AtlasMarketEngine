@@ -1,0 +1,25 @@
+# ============================================
+# 研究场景配置：学区改革 (Education Reform)
+# ============================================
+# 研究目标：研究教育公平政策如何影响房价结构
+
+market:
+  zones:
+    A:
+      school_district_ratio: 0.6   # A区学区房比例提升（教育均等化）
+    B:
+      school_district_ratio: 0.5   # B区学区房比例大幅提升
+
+# 房产分配策略调整
+property_allocation:
+  school_premium: [1.05, 1.10]  # 学区溢价从15-30% 降至 5-10%
+
+# 决策因子调整
+decision_factors:
+  activation:
+    weights:
+      has_school_age_child: 0.05  # 降低学区需求权重（因差异缩小）
+
+# 宏观环境
+macro_environment:
+  override_mode: "stable"  # 配合改革的稳定预期

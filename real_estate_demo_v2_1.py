@@ -11,9 +11,11 @@ import random
 import sqlite3
 import subprocess
 import sys
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import yaml
 
 from config.config_loader import SimulationConfig
 from simulation_runner import SimulationRunner
@@ -76,6 +78,11 @@ sys.stdout = LoggerWriter(sys.stdout, log_file_stream)
 sys.stderr = LoggerWriter(sys.stderr, log_file_stream)
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent
+SUPPLY_SNAPSHOT_CATALOG_PATH = PROJECT_ROOT / "config" / "supply_snapshot_catalog_v1.yaml"
+SUPPLY_SNAPSHOT_RESULTS_ROOT = PROJECT_ROOT / "results" / "supply_snapshot_catalog"
+
+
 def input_default(prompt, default_value):
     """Helper for input with default value"""
     try:
@@ -118,6 +125,485 @@ def _input_yes_no(prompt: str, default: bool = False) -> bool:
     if value in ("n", "no", "0", "false"):
         return False
     return bool(default)
+
+
+def _load_yaml_dict(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_json_dict(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8")) or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _find_latest_supply_snapshot_payload(
+    snapshot_id: str,
+    results_root: Path = SUPPLY_SNAPSHOT_RESULTS_ROOT,
+) -> Dict[str, Any]:
+    if not snapshot_id or not results_root.exists():
+        return {}
+
+    candidate_dirs = [
+        item for item in results_root.iterdir()
+        if item.is_dir() and (item / "snapshots" / f"{snapshot_id}.json").exists()
+    ]
+    candidate_dirs.sort(key=lambda item: item.stat().st_mtime, reverse=True)
+    for run_dir in candidate_dirs:
+        snapshot_path = run_dir / "snapshots" / f"{snapshot_id}.json"
+        payload = _load_json_dict(snapshot_path)
+        if payload:
+            return payload
+    return {}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _split_bucket_ids(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return [item.strip() for item in str(raw or "").split("|") if item.strip()]
+
+
+def _load_profile_pack_core(profile_pack_path: str) -> Dict[str, Any]:
+    if not profile_pack_path:
+        return {}
+    resolved = Path(profile_pack_path)
+    if not resolved.is_absolute():
+        resolved = (PROJECT_ROOT / resolved).resolve()
+    payload = _load_yaml_dict(resolved)
+    pack = payload.get("profiled_market_mode", payload)
+    if not isinstance(pack, dict):
+        return {}
+    return json.loads(json.dumps(pack, ensure_ascii=False))
+
+
+def _scale_bucket_counts_with_full_coverage(
+    bucket_counts: Dict[str, int],
+    target_total: int,
+) -> Tuple[Dict[str, int], Dict[str, Any]]:
+    normalized = {
+        str(bucket_id): max(0, int(count or 0))
+        for bucket_id, count in (bucket_counts or {}).items()
+        if str(bucket_id).strip()
+    }
+    active_items = [(bucket_id, count) for bucket_id, count in normalized.items() if count > 0]
+    active_bucket_count = len(active_items)
+    if active_bucket_count == 0:
+        return {}, {
+            "requested_total": int(target_total),
+            "effective_total": 0,
+            "minimum_required_total": 0,
+            "was_clamped": False,
+            "active_bucket_count": 0,
+        }
+
+    minimum_required_total = int(active_bucket_count)
+    effective_total = max(int(target_total), minimum_required_total)
+    remaining_total = int(effective_total - active_bucket_count)
+    original_total = max(1, sum(count for _, count in active_items))
+
+    scaled_counts = {bucket_id: 1 for bucket_id, _ in active_items}
+    if remaining_total > 0:
+        extras: List[Tuple[str, int, float]] = []
+        assigned_extra = 0
+        for bucket_id, count in active_items:
+            exact_extra = float(remaining_total) * (float(count) / float(original_total))
+            floor_extra = int(exact_extra)
+            extras.append((bucket_id, count, exact_extra - floor_extra))
+            scaled_counts[bucket_id] += floor_extra
+            assigned_extra += floor_extra
+        leftover = int(remaining_total - assigned_extra)
+        extras.sort(key=lambda item: (item[2], item[1], item[0]), reverse=True)
+        for idx in range(leftover):
+            scaled_counts[extras[idx % len(extras)][0]] += 1
+
+    return scaled_counts, {
+        "requested_total": int(target_total),
+        "effective_total": int(effective_total),
+        "minimum_required_total": int(minimum_required_total),
+        "was_clamped": bool(effective_total != int(target_total)),
+        "active_bucket_count": int(active_bucket_count),
+    }
+
+
+def build_scaled_profile_pack_from_snapshot(
+    *,
+    base_profile_pack_path: str,
+    snapshot_payload: Dict[str, Any],
+    target_agent_total: int,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    base_pack = _load_profile_pack_core(base_profile_pack_path)
+    demand_library = (
+        (snapshot_payload.get("governance_snapshot", {}) or {}).get("demand_library", {}) or {}
+    )
+    demand_buckets = demand_library.get("buckets", []) or []
+    bucket_counts = {
+        str(item.get("bucket_id", "")).strip(): _safe_int(item.get("count", 0), 0)
+        for item in demand_buckets
+        if isinstance(item, dict) and str(item.get("bucket_id", "")).strip()
+    }
+    scaled_counts, scale_meta = _scale_bucket_counts_with_full_coverage(bucket_counts, target_agent_total)
+    effective_total = int(scale_meta.get("effective_total", target_agent_total) or target_agent_total)
+
+    pack_bucket_defs = base_pack.get("agent_profile_buckets", {}) or {}
+    if isinstance(pack_bucket_defs, dict):
+        for bucket_id, raw_bucket in pack_bucket_defs.items():
+            bid = str(bucket_id or "").strip()
+            if not bid or not isinstance(raw_bucket, dict):
+                continue
+            if bid in scaled_counts:
+                raw_bucket["count"] = int(scaled_counts[bid])
+            elif _safe_int(raw_bucket.get("count", 0), 0) > 0:
+                raw_bucket["count"] = 0
+
+    demand_coverage_rows = snapshot_payload.get("demand_coverage", []) or []
+    active_bucket_ids = {bucket_id for bucket_id, count in scaled_counts.items() if int(count or 0) > 0}
+    covered_supply_bucket_ids = set()
+    for row in demand_coverage_rows:
+        if not isinstance(row, dict):
+            continue
+        bucket_id = str(row.get("demand_bucket_id", "") or "").strip()
+        if bucket_id not in active_bucket_ids:
+            continue
+        covered_supply_bucket_ids.update(_split_bucket_ids(row.get("eligible_supply_bucket_ids")))
+        covered_supply_bucket_ids.update(_split_bucket_ids(row.get("primary_supply_bucket_ids")))
+
+    supply_buckets = (
+        (snapshot_payload.get("governance_snapshot", {}) or {}).get("supply_library", {}) or {}
+    ).get("buckets", []) or []
+    all_supply_bucket_ids = {
+        str(item.get("bucket_id", "")).strip()
+        for item in supply_buckets
+        if isinstance(item, dict) and str(item.get("bucket_id", "")).strip()
+    }
+
+    coverage_summary = {
+        "buyer_bucket_count": int(scale_meta.get("active_bucket_count", 0) or 0),
+        "buyer_bucket_count_preserved": int(len(active_bucket_ids)),
+        "supply_bucket_count": int(len(all_supply_bucket_ids)),
+        "supply_bucket_count_covered": int(len(all_supply_bucket_ids & covered_supply_bucket_ids)),
+        "all_buyer_buckets_preserved": bool(len(active_bucket_ids) == int(scale_meta.get("active_bucket_count", 0))),
+        "all_supply_buckets_covered": bool(all_supply_bucket_ids.issubset(covered_supply_bucket_ids)),
+        "bucket_counts": dict(sorted(scaled_counts.items())),
+        "scale_meta": scale_meta,
+    }
+    return base_pack, {
+        "effective_agent_count": effective_total,
+        "scaled_bucket_counts": dict(sorted(scaled_counts.items())),
+        "coverage_summary": coverage_summary,
+        "scale_meta": scale_meta,
+    }
+
+
+def load_release_supply_snapshot_options(
+    catalog_path: Path = SUPPLY_SNAPSHOT_CATALOG_PATH,
+    results_root: Path = SUPPLY_SNAPSHOT_RESULTS_ROOT,
+) -> List[Dict[str, Any]]:
+    catalog = _load_yaml_dict(catalog_path)
+    catalog_meta = catalog.get("catalog", {}) or {}
+    size_profiles = catalog.get("size_profiles", {}) or {}
+    structure_families = catalog.get("structure_families", {}) or {}
+    base_profile_pack = catalog.get("base_profile_pack", {}) or {}
+
+    options: List[Dict[str, Any]] = []
+    for preset in catalog.get("presets", []) or []:
+        if not isinstance(preset, dict):
+            continue
+        structure_family = str(preset.get("structure_family", "") or "").strip().lower()
+        snapshot_id = str(preset.get("snapshot_id", "") or "").strip()
+        size_profile = str(preset.get("size_profile", "") or "").strip().lower()
+        family_cfg = structure_families.get(structure_family, {}) or {}
+        size_cfg = size_profiles.get(size_profile, {}) or {}
+        artifact = _find_latest_supply_snapshot_payload(snapshot_id, results_root=results_root)
+        snapshot_row = artifact.get("snapshot_row", {}) or {}
+        demand_library = (artifact.get("governance_snapshot", {}) or {}).get("demand_library", {}) or {}
+        demand_bucket_count = int(demand_library.get("bucket_count", 0) or 0)
+
+        total_selected_supply = int(
+            snapshot_row.get("total_selected_supply")
+            or size_cfg.get("approx_total_supply")
+            or 0
+        )
+        snapshot_status = str(
+            snapshot_row.get("snapshot_status")
+            or size_cfg.get("catalog_status")
+            or "unknown"
+        ).strip().lower()
+        options.append(
+            {
+                "snapshot_id": snapshot_id,
+                "display_name": str(size_cfg.get("display_name") or size_profile or snapshot_id),
+                "structure_family": structure_family,
+                "family_label": str(family_cfg.get("startup_label") or family_cfg.get("description") or structure_family),
+                "family_description": str(family_cfg.get("description") or ""),
+                "size_profile": size_profile,
+                "recommended_use": str(preset.get("recommended_use") or ""),
+                "total_selected_supply": total_selected_supply,
+                "snapshot_status": snapshot_status,
+                "status_summary": str(snapshot_row.get("status_summary") or ""),
+                "competition_hotspot_bucket_count": int(snapshot_row.get("competition_hotspot_bucket_count") or 0),
+                "startup_characteristics": str(size_cfg.get("startup_characteristics") or size_cfg.get("description") or ""),
+                "speed_tradeoff": str(size_cfg.get("startup_speed_tradeoff") or ""),
+                "accuracy_tradeoff": str(size_cfg.get("startup_accuracy_tradeoff") or ""),
+                "profile_pack_path": str(base_profile_pack.get("path") or _choose_profile_pack("balanced")),
+                "experiment_mode": str(snapshot_row.get("experiment_mode") or base_profile_pack.get("experiment_mode") or "abundant"),
+                "minimum_demand_multiplier": round(
+                    float(demand_bucket_count) / float(max(1, total_selected_supply)),
+                    4,
+                ) if demand_bucket_count > 0 and total_selected_supply > 0 else 0.0,
+                "demand_bucket_count": demand_bucket_count,
+                "config_patches": dict(family_cfg.get("startup_config_patches") or {}),
+                "snapshot_payload": artifact,
+            }
+        )
+    recommended_snapshot_id = str(catalog_meta.get("recommended_snapshot_id") or "spindle_medium").strip()
+    size_rank = {"minimum": 0, "medium": 1, "large": 2}
+    family_rank = {"spindle": 0, "pyramid": 1}
+    options.sort(
+        key=lambda item: (
+            0 if str(item.get("snapshot_id", "")).strip() == recommended_snapshot_id else 1,
+            family_rank.get(str(item.get("structure_family", "")).strip().lower(), 99),
+            size_rank.get(str(item.get("size_profile", "")).strip().lower(), 99),
+            str(item.get("snapshot_id", "")),
+        )
+    )
+    return options
+
+
+def _prompt_release_supply_snapshot() -> Dict[str, Any]:
+    options = load_release_supply_snapshot_options()
+    if not options:
+        return {
+            "snapshot_id": "spindle_medium",
+            "display_name": "中样本",
+            "structure_family": "spindle",
+            "family_label": "梭子型固定供应盘",
+            "family_description": "梭子型结构：中间改善与主流需求更厚，两端保留但不过度堆积。",
+            "size_profile": "medium",
+            "recommended_use": "默认基准盘 / A-B 桥接研究",
+            "total_selected_supply": 91,
+            "snapshot_status": "pass",
+            "status_summary": "结构覆盖通过",
+            "competition_hotspot_bucket_count": 0,
+            "minimum_demand_multiplier": round(12.0 / 91.0, 4),
+            "demand_bucket_count": 12,
+            "startup_characteristics": "推荐默认基准盘，速度和稳定性最平衡。",
+        "speed_tradeoff": "运行速度适中，适合大多数 1-3 回合验证。",
+            "accuracy_tradeoff": "结构覆盖稳定，适合做基准比较和 checkpoint 复核。",
+            "profile_pack_path": "config/line_a_profile_pack_v2_template.yaml",
+            "experiment_mode": "abundant",
+            "config_patches": {},
+            "snapshot_payload": {},
+        }
+
+    default_option = next(
+        (item for item in options if str(item.get("snapshot_id")) == "spindle_medium"),
+        options[0],
+    )
+    print("\n" + "=" * 70)
+    print("固定供应侧样本选择")
+    print("=" * 70)
+    print("当前发布入口锁定固定供应盘，不再让测试用户手动拼供给结构。")
+    print("当前开放两类固定供应盘：梭子型、金字塔型。")
+    print("统一顺序是：先选固定供应盘，再设需求侧倍率，再决定是否加入自动冲击。")
+    print("需求倍率允许 0.10x - 2.00x，系统会自动保障：")
+    print("  1. 每类买家画像都不会被压到消失")
+    print("  2. 每类供应画像都仍有对应买家覆盖")
+    for idx, option in enumerate(options, start=1):
+        hotspot_note = ""
+        if int(option.get("competition_hotspot_bucket_count", 0) or 0) > 0:
+            hotspot_note = f"，热点桶 {int(option['competition_hotspot_bucket_count'])} 个"
+        print(f"{idx}. {option['snapshot_id']} / {option['display_name']} / 约 {int(option['total_selected_supply'])} 套")
+        print(f"   结构: {option['family_label']}")
+        print(f"   用途: {option['recommended_use']}")
+        print(f"   特点: {option['startup_characteristics']}")
+        print(f"   速度: {option['speed_tradeoff']}")
+        print(f"   稳定性: {option['accuracy_tradeoff']}")
+        print(
+            f"   覆盖下限: 需求倍率至少 {float(option.get('minimum_demand_multiplier', 0.0) or 0.0):.2f}x，"
+            f"才能保留 {int(option.get('demand_bucket_count', 0) or 0)} 个买家画像桶"
+        )
+        print(f"   结构校验: {str(option['snapshot_status']).upper()} {option['status_summary']}{hotspot_note}")
+
+    raw = input_default(
+        "选择供应侧样本 [1/2/3 或 snapshot_id]",
+        str(default_option["snapshot_id"]),
+    ).strip().lower()
+    if raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(options):
+            return dict(options[idx])
+    for option in options:
+        if str(option.get("snapshot_id", "")).strip().lower() == raw:
+            return dict(option)
+    return dict(default_option)
+
+
+def _derive_agent_count_from_supply(supply_count: int, demand_multiplier: float) -> int:
+    resolved_supply = max(1, int(supply_count))
+    resolved_multiplier = max(0.1, min(2.0, float(demand_multiplier)))
+    return max(1, int((resolved_supply * resolved_multiplier) + 0.5))
+
+
+def _format_preplanned_intervention(plan: Dict[str, Any]) -> str:
+    action_type = str(plan.get("action_type", "") or "").strip().lower()
+    month = int(plan.get("month", 0) or 0)
+    if action_type == "income_shock":
+        pct_change = float(plan.get("pct_change", 0.0) or 0.0)
+        target_tier = str(plan.get("target_tier", "all") or "all")
+        return f"第{month}回合 收入冲击 {pct_change:+.0%} / 目标层级={target_tier}"
+    if action_type == "developer_supply":
+        zone = str(plan.get("zone", "A") or "A").upper()
+        count = int(plan.get("count", 0) or 0)
+        template = str(plan.get("template", "mixed_balanced") or "mixed_balanced")
+        return f"第{month}回合 {zone}区 增供 {count} 套 / 模板={template}"
+    if action_type == "supply_cut":
+        zone = str(plan.get("zone", "A") or "A").upper()
+        count = int(plan.get("count", 0) or 0)
+        return f"第{month}回合 {zone}区 减供 {count} 套"
+    return json.dumps(plan, ensure_ascii=False)
+
+
+def collect_preplanned_market_shocks(config: SimulationConfig, months: int) -> List[Dict[str, Any]]:
+    plans: List[Dict[str, Any]] = []
+    print("\n" + "-" * 70)
+    print("自动回合冲击设置（回合=虚拟市场周期）")
+    print("-" * 70)
+    print("这里配置的内容会写入 simulation.preplanned_interventions，供测试用户完整复现。")
+    if not _input_yes_no("是否预排自动回合冲击?", False):
+        return plans
+
+    if _input_yes_no("是否配置收入增减冲击?", False):
+        income_shock_count = _prompt_int_param(
+            "收入冲击次数",
+            "自动在指定回合统一调节收入。负数表示下调，正数表示上调。",
+            f"1-{max(1, months)}",
+            "次数越多，越像多阶段宏观波动；次数越少，越像一次性冲击。",
+            1,
+            1,
+            max(1, months),
+            "Income shock count",
+        )
+        for idx in range(income_shock_count):
+            month = _prompt_int_param(
+                f"第 {idx + 1} 次收入冲击回合",
+                "冲击会在该回合开始前自动执行。",
+                f"1-{months}",
+                "越早影响越广，越晚越偏向尾部扰动。",
+                min(months, idx + 1),
+                1,
+                months,
+                "Income shock round",
+            )
+            pct_change = _prompt_float_param(
+                f"第 {idx + 1} 次收入冲击比例",
+                "填写 -0.10 表示降 10%，填写 0.10 表示升 10%。",
+                "-0.50-0.50",
+                "绝对值越大，购买力扰动越强。",
+                -0.10 if idx == 0 else 0.05,
+                -0.50,
+                0.50,
+                "Income shock pct_change",
+            )
+            target_tier = input_default(
+                "目标收入层级 [all/low/lower_middle/middle/high/ultra_high]",
+                "all",
+            ).strip().lower() or "all"
+            plans.append(
+                {
+                    "action_type": "income_shock",
+                    "month": int(month),
+                    "pct_change": float(pct_change),
+                    "target_tier": target_tier,
+                }
+            )
+
+    if _input_yes_no("是否配置房产供应增减冲击?", False):
+        supply_shock_count = _prompt_int_param(
+            "房产供应冲击次数",
+            "自动在指定回合执行增供或减供。",
+            f"1-{max(1, months * 2)}",
+            "次数越多，越像持续调控；次数越少，越像单次政策动作。",
+            1,
+            1,
+            max(1, months * 2),
+            "Supply shock count",
+        )
+        base_year_default = int(config.get("simulation.base_year", 2026) or 2026)
+        for idx in range(supply_shock_count):
+            direction_raw = input_default(
+                f"第 {idx + 1} 次供应冲击方向 [add/cut]",
+                "add",
+            ).strip().lower()
+            is_add = direction_raw not in {"cut", "remove", "down", "2"}
+            month = _prompt_int_param(
+                f"第 {idx + 1} 次供应冲击回合",
+                "冲击会在该回合开始前自动执行。",
+                f"1-{months}",
+            "越早越能影响更多后续回合。",
+                min(months, idx + 1),
+                1,
+                months,
+                "Supply shock round",
+            )
+            zone = input_default("目标区域 (A/B)", "A").strip().upper()
+            if zone not in {"A", "B"}:
+                print("⚠️ 区域无效，自动回退 A。")
+                zone = "A"
+            count = _prompt_int_param(
+                f"第 {idx + 1} 次供应冲击数量",
+                "增供表示新增挂牌套数；减供表示强制撤下在售房源数量。",
+                "1-500",
+                "数量越大，对库存和竞争形状影响越明显。",
+                10,
+                1,
+                500,
+                "Supply shock count",
+            )
+            if is_add:
+                template_default = "mixed_balanced" if zone == "A" else "b_entry_level"
+                template = input_default(
+                    "增供模板 [mixed_balanced/a_district_premium/b_entry_level]",
+                    template_default,
+                ).strip().lower()
+                if template not in {"mixed_balanced", "a_district_premium", "b_entry_level"}:
+                    template = template_default
+                build_year_raw = input_default("建成年份(回车=模拟基准年)", "").strip()
+                plan: Dict[str, Any] = {
+                    "action_type": "developer_supply",
+                    "month": int(month),
+                    "zone": zone,
+                    "count": int(count),
+                    "template": template,
+                }
+                if build_year_raw:
+                    plan["build_year"] = _clamp_int(build_year_raw, 1900, 2100, base_year_default)
+                plans.append(plan)
+            else:
+                plans.append(
+                    {
+                        "action_type": "supply_cut",
+                        "month": int(month),
+                        "zone": zone,
+                        "count": int(count),
+                    }
+                )
+
+    if plans:
+        print("\n已预排的自动冲击:")
+        for plan in plans:
+            print(f"  - {_format_preplanned_intervention(plan)}")
+    return plans
 
 
 def _print_param_help(title: str, meaning: str, value_range: str, low_high_hint: str) -> None:
@@ -338,13 +824,15 @@ def build_resume_status_card(db_path: str, config: SimulationConfig) -> Dict[str
 def print_resume_status_card(db_path: str, config: SimulationConfig) -> None:
     card = build_resume_status_card(db_path, config)
     _render_block_title("续跑前状态摘要卡")
-    print("你现在不是从空项目重新开始，而是在上个月的真实状态上继续往后跑。")
+    print("你现在不是从空项目重新开始，而是在上一回合结束后的真实状态上继续往后跑。")
     print("下面这张卡展示的是数据库里已经沉淀下来的历史状态。")
+    print(f"当前数据库位置         : {db_path}")
+    print("提示                   : 如果个别输出里仍出现“月份/month”，请按回合机制理解。")
     _print_kv_rows(
         [
-            ("当前已完成月份", card["completed_month"]),
+            ("当前已完成回合", card["completed_month"]),
             ("累计成交", card["transactions_total"]),
-            ("上月成交", card["transactions_last_month"]),
+            ("上回合成交", card["transactions_last_month"]),
             ("当前在售库存", card["for_sale_inventory_now"]),
             ("当前活跃参与者", card["active_participants_now"]),
             ("当前买方侧活跃人数", card["buyer_side_active_now"]),
@@ -355,7 +843,7 @@ def print_resume_status_card(db_path: str, config: SimulationConfig) -> None:
         ]
     )
     if card["average_price_last_month"] > 0:
-        print(f"上月平均成交价         : {card['average_price_last_month']:.0f}")
+        print(f"上回合平均成交价       : {card['average_price_last_month']:.0f}")
     print(f"项目数据库             : {db_path}")
 
 
@@ -418,7 +906,7 @@ def render_and_save_scholar_result_card(db_path: str, config: SimulationConfig) 
         "",
         "## 一、这次实验是什么",
         f"- 运行目录: `{run_dir}`",
-        f"- 已完成月份: `{card['completed_month']}`",
+        f"- 已完成回合: `{card['completed_month']}`",
         f"- 研究目标: `{card['market_goal']}` / `{_market_goal_title(card['market_goal'])}`",
         f"- 目标解释: {card['market_goal_explainer']}",
         f"- 目标订单压力提示: `{card['target_r_order_hint']:.2f}` ({card['target_outcome_hint']})",
@@ -430,13 +918,16 @@ def render_and_save_scholar_result_card(db_path: str, config: SimulationConfig) 
         "",
         "## 三、结果速览",
         f"- 累计成交: `{card['transactions_total']}`",
-        f"- 最后一个已完成月份成交: `{card['transactions_last_month']}`",
+        f"- 最后一个已完成回合成交: `{card['transactions_last_month']}`",
         f"- 累计成交买家数: `{card['distinct_buyers_transacted']}`",
         f"- 平均成交价: `{card['average_transaction_price']:.0f}`",
         f"- 当前在售库存: `{card['for_sale_inventory_now']}`",
         f"- 当前活跃参与者: `{card['active_participants_now']}`",
         "",
         "## 四、怎么复查",
+        f"- 当前数据库位置: `{card['evidence']['db_path']}`",
+        "- 注意：这里的“回合”是虚拟市场周期，不直接等同现实自然月。",
+        "- 如果个别输出里仍出现“月份/month”，请同样按回合机制理解。",
         "- 先看本文件，快速理解本轮目标和结果。",
         "- 再看 `config.yaml`，确认本轮参数是否按预期写入。",
         "- 再看 `simulation.db`，核验成交、库存、活跃参与者等硬证据。",
@@ -456,15 +947,17 @@ def render_and_save_scholar_result_card(db_path: str, config: SimulationConfig) 
 
     _render_block_title("本次 Run 结果卡")
     print("先看一句话结论，再看数字，最后去证据目录复查。")
+    print(f"当前数据库位置         : {card['evidence']['db_path']}")
+    print("提示                   : 本项目里的“回合”是虚拟市场周期；若个别输出仍出现“月份/month”，请按回合机制理解。")
     _print_kv_rows(
         [
             ("研究目标", f"{card['market_goal']} / {_market_goal_title(card['market_goal'])}"),
             ("目标订单压力提示", f"{card['target_r_order_hint']:.2f}"),
             ("估算初始 L0", card["estimated_l0"]),
             ("估算 initial_listing_rate", card["estimated_initial_listing_rate"]),
-            ("已完成月份", card["completed_month"]),
+            ("已完成回合", card["completed_month"]),
             ("累计成交", card["transactions_total"]),
-            ("最后月成交", card["transactions_last_month"]),
+            ("最后回合成交", card["transactions_last_month"]),
             ("累计成交买家数", card["distinct_buyers_transacted"]),
             ("平均成交价", f"{card['average_transaction_price']:.0f}"),
             ("当前在售库存", card["for_sale_inventory_now"]),
@@ -524,9 +1017,10 @@ def render_scholar_banner() -> None:
     print("这是课题线 B 的对外演示入口，重点展示“可控市场推演能力”。")
     print("你在这里输入的关键参数，会写进本次 run 的 config.yaml，并直接作用于本次模拟。")
     print("当前发布边界: 可控市场推演已开放；自然激活属于研究中功能，可切换但不作为本版主卖点。")
+    print("当前默认发布路径: 先选固定供应侧样本（梭子型小/中/大），再设需求倍率和预排冲击。")
     print("\n你现在可以做三类事情:")
     print("1. 新建实验，快速搭一个平衡 / 买方 / 卖方环境。")
-    print("2. 继续实验，继承上月 agent 和房源状态往后跑。")
+    print("2. 继续实验，继承上回合 agent 和房源状态往后跑。")
     print("3. 打开研究员工具，对已有项目做体检或夜跑。")
 
 
@@ -542,41 +1036,66 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
     goal_map = {"1": "balanced", "2": "buyer_market", "3": "seller_market"}
     market_goal = goal_map.get(goal_raw, goal_raw if goal_raw in goal_map.values() else "balanced")
 
+    supply_snapshot = _prompt_release_supply_snapshot()
     months = _prompt_int_param(
-        "模拟月数",
-        "本次要跑多少个月。短测适合 1-3 个月，长测适合 6-12 个月。",
+        "模拟回合数",
+        "本次要跑多少个回合。这里的回合是虚拟市场周期，不直接等同现实自然月。",
         "1-24",
-        "越小越快，但可能只看到首月现象；越大越能看到跨月承接和趋势。",
+        "越小越快，但可能只看到首轮现象；越大越能看到跨回合承接和趋势。",
         3,
         1,
         24,
-        "Simulation months",
+        "Simulation rounds",
     )
-    agent_count = _prompt_int_param(
-        "Agent 数量",
-        "参与本次市场的总人数。包含潜在买家、卖家和兼具买卖任务的人。",
-        "20-500",
-        "过低容易受随机波动影响；过高更稳定，但运行更慢。",
-        50,
-        20,
-        500,
-        "Total agents",
+
+    property_count = int(supply_snapshot.get("total_selected_supply", 0) or 0)
+    if property_count <= 0:
+        property_count = 91
+    demand_multiplier_default = {
+        "balanced": 1.00,
+        "buyer_market": 0.80,
+        "seller_market": 1.30,
+    }.get(market_goal, 1.00)
+    demand_multiplier = _prompt_float_param(
+        "需求侧生成倍率",
+        "按固定供应盘总套数派生需求侧 agent 数量。1.00 表示需求侧人数约等于供应套数，1.50 表示需求侧约为供应侧的 1.5 倍。",
+        "0.10-2.00",
+        "倍率越低越冷、越快；倍率越高越容易形成竞争、扩散和挤出。",
+        demand_multiplier_default,
+        0.10,
+        2.00,
+        "Demand multiplier vs supply",
     )
-    property_count = _prompt_int_param(
-        "房源总量",
-        "初始化阶段生成的总房产数量，不等于当月立刻挂牌的数量。",
-        "20-1000",
-        "过低会让供给很紧；过高会让市场更冷、更分散。",
-        max(40, int(agent_count * 1.2)),
-        20,
-        1000,
-        "Total properties",
+    agent_count = _derive_agent_count_from_supply(property_count, demand_multiplier)
+    scaled_profile_pack, demand_bucket_plan = build_scaled_profile_pack_from_snapshot(
+        base_profile_pack_path=str(supply_snapshot.get("profile_pack_path") or _choose_profile_pack(market_goal)),
+        snapshot_payload=dict(supply_snapshot.get("snapshot_payload") or {}),
+        target_agent_total=agent_count,
+    )
+    agent_count = int(demand_bucket_plan.get("effective_agent_count", agent_count) or agent_count)
+    effective_demand_multiplier = float(agent_count) / float(max(1, property_count))
+    print(
+        f"固定供应盘 {supply_snapshot['snapshot_id']} 已锁定为 {property_count} 套，"
+        f"按需求倍率 {demand_multiplier:.2f} 推导 agent_count={agent_count}。"
+    )
+    if bool((demand_bucket_plan.get("scale_meta", {}) or {}).get("was_clamped", False)):
+        min_mult = float(supply_snapshot.get("minimum_demand_multiplier", 0.0) or 0.0)
+        print(
+            f"⚠️ 为保留全部买家画像桶并维持供需双向覆盖，需求倍率已从 {demand_multiplier:.2f}x "
+            f"自动抬到有效 {effective_demand_multiplier:.2f}x（该盘下限约 {min_mult:.2f}x）。"
+        )
+    coverage_summary = demand_bucket_plan.get("coverage_summary", {}) or {}
+    print(
+        f"覆盖保障: 买家桶 {int(coverage_summary.get('buyer_bucket_count_preserved', 0) or 0)}/"
+        f"{int(coverage_summary.get('buyer_bucket_count', 0) or 0)} 保留，"
+        f"供应桶 {int(coverage_summary.get('supply_bucket_count_covered', 0) or 0)}/"
+        f"{int(coverage_summary.get('supply_bucket_count', 0) or 0)} 有对应买家。"
     )
 
     role_defaults = _scale_role_defaults(agent_count, market_goal)
     buyer_quota = _prompt_int_param(
         "强制纯买家人数",
-        "本月被直接推进 BUYER 角色的人数。只强制角色，不强制成交。",
+        "本回合被直接推进 BUYER 角色的人数。只强制角色，不强制成交。",
         f"0-{agent_count}",
         "越低，需求更弱；越高，会把更多压力推进候选、竞价和支付链路。",
         role_defaults["BUYER"],
@@ -586,7 +1105,7 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
     )
     seller_quota = _prompt_int_param(
         "强制纯卖家人数",
-        "本月被直接推进 SELLER 角色的人数。",
+        "本回合被直接推进 SELLER 角色的人数。",
         f"0-{max(0, agent_count - buyer_quota)}",
         "越低，供给更紧；越高，供给更松，买方更容易有更多候选房。",
         min(role_defaults["SELLER"], max(0, agent_count - buyer_quota)),
@@ -597,9 +1116,9 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
     max_dual = max(0, agent_count - buyer_quota - seller_quota)
     buyer_seller_quota = _prompt_int_param(
         "强制买卖并行人数",
-        "同时承担卖旧房和买新房任务的人数，对置换链和跨月承接很重要。",
+        "同时承担卖旧房和买新房任务的人数，对置换链和跨回合承接很重要。",
         f"0-{max_dual}",
-        "越低，链式置换更弱；越高，会增加先卖后买和跨月延续现象。",
+        "越低，链式置换更弱；越高，会增加先卖后买和跨回合延续现象。",
         min(role_defaults["BUYER_SELLER"], max_dual),
         0,
         max_dual,
@@ -627,13 +1146,13 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
     )
     force_role_months = _prompt_int_param(
         "强制角色生效月数",
-        "从第 1 个月开始，连续多少个月启用 forced_role_mode。",
+        "从第 1 回合开始，连续多少回合启用 forced_role_mode。",
         f"1-{months}",
-        "月数越短，越接近首月注入；月数越长，对多月边界影响更持续。",
+        "回合数越短，越接近首回合注入；回合数越长，对多回合边界影响更持续。",
         min(months, 3),
         1,
         months,
-        "Forced role active months",
+        "Forced role active rounds",
     )
 
     profiled_market_mode = _input_yes_no(
@@ -645,7 +1164,7 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
         True,
     )
     enable_intervention_panel = _input_yes_no(
-        "启用月末人工干预面板 enable_intervention_panel?",
+        "启用回合末人工干预面板 enable_intervention_panel?",
         False,
     )
     open_startup_intervention_menu = _input_yes_no(
@@ -653,20 +1172,27 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
         False,
     )
 
+    preplanned_interventions = collect_preplanned_market_shocks(config, months)
+
     listing_plan = _estimate_listing_rate(
         property_count=property_count,
         buyer_quota=buyer_quota,
         buyer_seller_quota=buyer_seller_quota,
         target_r_order_hint=target_r_order_hint,
     )
-    profile_pack_path = _choose_profile_pack(market_goal)
-    experiment_mode = _choose_experiment_mode(market_goal)
+    profile_pack_path = str(supply_snapshot.get("profile_pack_path") or _choose_profile_pack(market_goal))
+    experiment_mode = str(supply_snapshot.get("experiment_mode") or _choose_experiment_mode(market_goal))
 
     return {
         "market_goal": market_goal,
         "months": months,
         "agent_count": agent_count,
         "property_count": property_count,
+        "demand_multiplier": float(demand_multiplier),
+        "effective_demand_multiplier": float(effective_demand_multiplier),
+        "supply_snapshot": supply_snapshot,
+        "profile_pack_inline": scaled_profile_pack,
+        "demand_bucket_plan": demand_bucket_plan,
         "buyer_quota": buyer_quota,
         "seller_quota": seller_quota,
         "buyer_seller_quota": buyer_seller_quota,
@@ -680,6 +1206,7 @@ def collect_scholar_new_run_inputs(config: SimulationConfig, seed_to_use: Option
         "profile_pack_path": profile_pack_path,
         "experiment_mode": experiment_mode,
         "listing_plan": listing_plan,
+        "preplanned_interventions": preplanned_interventions,
         "seed": seed_to_use,
     }
 
@@ -690,6 +1217,8 @@ def apply_scholar_release_config(
     start_month: int = 1,
 ) -> None:
     property_count = int(scholar_inputs["property_count"])
+    supply_snapshot = scholar_inputs.get("supply_snapshot", {}) or {}
+    demand_bucket_plan = scholar_inputs.get("demand_bucket_plan", {}) or {}
     listing_plan = scholar_inputs["listing_plan"]
     desired_l0 = int(listing_plan["desired_l0"])
     listing_rate = float(listing_plan["listing_rate"])
@@ -705,9 +1234,13 @@ def apply_scholar_release_config(
 
     config.update("simulation.enable_intervention_panel", bool(scholar_inputs["enable_intervention_panel"]))
     config.update("simulation.agent.income_adjustment_rate", float(scholar_inputs["income_multiplier"]))
+    config.update("simulation.preplanned_interventions", list(scholar_inputs.get("preplanned_interventions", []) or []))
     config.update("market.initial_listing_rate", float(listing_rate))
     config.update("smart_agent.init_min_tradable_floor_total", int(desired_l0))
     config.update("smart_agent.init_min_tradable_ratio_total", round(float(desired_l0) / max(1, property_count), 4))
+
+    for patch_key, patch_value in dict(supply_snapshot.get("config_patches") or {}).items():
+        config.update(str(patch_key), patch_value)
 
     config.update("smart_agent.forced_role_mode.enabled", True)
     config.update("smart_agent.forced_role_mode.apply_months", apply_months)
@@ -719,6 +1252,7 @@ def apply_scholar_release_config(
 
     config.update("smart_agent.profiled_market_mode.enabled", bool(scholar_inputs["profiled_market_mode"]))
     config.update("smart_agent.profiled_market_mode.profile_pack_path", str(scholar_inputs["profile_pack_path"]))
+    config.update("smart_agent.profiled_market_mode.profile_pack", dict(scholar_inputs.get("profile_pack_inline") or {}))
     config.update("smart_agent.profiled_market_mode.background_library_path", "config/persona_background_library.json")
     config.update("smart_agent.profiled_market_mode.persona_generation_mode", "code_only")
     config.update("smart_agent.profiled_market_mode.experiment_mode", str(scholar_inputs["experiment_mode"]))
@@ -733,10 +1267,22 @@ def apply_scholar_release_config(
             "target_r_order_hint": float(scholar_inputs["target_r_order_hint"]),
             "estimated_l0": int(desired_l0),
             "estimated_initial_listing_rate": float(listing_rate),
+            "demand_multiplier": float(scholar_inputs.get("demand_multiplier", 1.0) or 1.0),
+            "effective_demand_multiplier": float(scholar_inputs.get("effective_demand_multiplier", 1.0) or 1.0),
             "open_startup_intervention_menu": bool(scholar_inputs["open_startup_intervention_menu"]),
             "profile_pack_path": str(scholar_inputs["profile_pack_path"]),
             "experiment_mode": str(scholar_inputs["experiment_mode"]),
             "resume_start_month": int(start_month),
+            "fixed_supply_snapshot": {
+                "snapshot_id": str(supply_snapshot.get("snapshot_id", "")),
+                "display_name": str(supply_snapshot.get("display_name", "")),
+                "structure_family": str(supply_snapshot.get("structure_family", "")),
+                "family_label": str(supply_snapshot.get("family_label", "")),
+                "property_count": int(property_count),
+                "snapshot_status": str(supply_snapshot.get("snapshot_status", "")),
+            },
+            "preplanned_intervention_count": len(scholar_inputs.get("preplanned_interventions", []) or []),
+            "demand_bucket_plan": demand_bucket_plan,
         },
     )
 
@@ -746,6 +1292,9 @@ def print_scholar_summary(
     db_path: Optional[str] = None,
     resume_from_month: Optional[int] = None,
 ) -> None:
+    supply_snapshot = scholar_inputs.get("supply_snapshot", {}) or {}
+    demand_bucket_plan = scholar_inputs.get("demand_bucket_plan", {}) or {}
+    preplanned_interventions = scholar_inputs.get("preplanned_interventions", []) or []
     listing_plan = scholar_inputs["listing_plan"]
     target_r_order_hint = float(scholar_inputs["target_r_order_hint"])
     if target_r_order_hint < 0.9:
@@ -759,13 +1308,20 @@ def print_scholar_summary(
     if db_path:
         print(f"项目数据库: {db_path}")
     if resume_from_month is not None:
-        print(f"续跑起点: 已完成到第 {resume_from_month} 月，接下来继续往后跑。")
+        print(f"续跑起点: 已完成到第 {resume_from_month} 回合，接下来继续往后跑。")
     _print_kv_rows(
         [
             ("目标市场", f"{scholar_inputs['market_goal']} / {_market_goal_title(scholar_inputs['market_goal'])}"),
-            ("模拟月数", scholar_inputs["months"]),
+            ("模拟回合数", scholar_inputs["months"]),
+            (
+                "固定供应盘",
+                f"{supply_snapshot.get('snapshot_id', 'n/a')} / "
+                f"{supply_snapshot.get('family_label', '固定供应盘')}",
+            ),
             ("Agent 总数", scholar_inputs["agent_count"]),
             ("房源总量", scholar_inputs["property_count"]),
+            ("需求侧倍率", f"{float(scholar_inputs.get('demand_multiplier', 1.0) or 1.0):.2f} x 供应套数"),
+            ("有效需求倍率", f"{float(scholar_inputs.get('effective_demand_multiplier', 1.0) or 1.0):.2f} x 供应套数"),
             (
                 "强制角色配额",
                 (
@@ -781,10 +1337,32 @@ def print_scholar_summary(
             ("画像供需模式", _bool_tag(scholar_inputs["profiled_market_mode"])),
             ("硬 bucket 匹配器", _bool_tag(scholar_inputs["hard_bucket_matcher"])),
             ("收入倍率", f"{scholar_inputs['income_multiplier']:.2f}"),
-            ("强制角色作用月数", scholar_inputs["force_role_months"]),
+            ("强制角色作用回合数", scholar_inputs["force_role_months"]),
+            ("自动回合冲击", f"{len(preplanned_interventions)} 项"),
             ("启动前人工干预菜单", _bool_tag(scholar_inputs["open_startup_intervention_menu"])),
         ]
     )
+    if supply_snapshot:
+        print(f"供应盘特点: {supply_snapshot.get('startup_characteristics', '')}")
+        print(f"速度取舍: {supply_snapshot.get('speed_tradeoff', '')}")
+        print(f"稳定性取舍: {supply_snapshot.get('accuracy_tradeoff', '')}")
+        print(
+            f"覆盖下限: 该盘要求需求倍率至少 {float(supply_snapshot.get('minimum_demand_multiplier', 0.0) or 0.0):.2f}x，"
+            f"以保留全部 {int(supply_snapshot.get('demand_bucket_count', 0) or 0)} 个买家画像桶。"
+        )
+    if demand_bucket_plan:
+        coverage_summary = demand_bucket_plan.get("coverage_summary", {}) or {}
+        print(
+            "覆盖保障: "
+            f"买家桶 {int(coverage_summary.get('buyer_bucket_count_preserved', 0) or 0)}/"
+            f"{int(coverage_summary.get('buyer_bucket_count', 0) or 0)} 保留；"
+            f"供应桶 {int(coverage_summary.get('supply_bucket_count_covered', 0) or 0)}/"
+            f"{int(coverage_summary.get('supply_bucket_count', 0) or 0)} 有对应买家。"
+        )
+    if preplanned_interventions:
+        print("预排自动冲击:")
+        for plan in preplanned_interventions:
+            print(f"  - {_format_preplanned_intervention(plan)}")
     print("说明: R_order 提示值只是研究员目标，不是系统承诺值。真实结果仍由候选、支付、竞争和交割链共同决定。")
 
 
@@ -798,18 +1376,18 @@ def collect_scholar_resume_inputs(
     print("Scholar Resume Setup")
     print("-" * 70)
     print_resume_status_card(db_path, config)
-    print(f"\n检测到该项目已完成到第 {last_month} 月。")
-    print("Resume 模式会继承上月 agent、房源、active_participants 和数据库状态，再继续往后跑。")
+    print(f"\n检测到该项目已完成到第 {last_month} 回合。")
+    print("Resume 模式会继承上回合 agent、房源、active_participants 和数据库状态，再继续往后跑。")
 
     extra_months = _prompt_int_param(
-        "追加模拟月数",
-        "在现有项目状态基础上，再继续跑多少个月。",
+        "追加模拟回合数",
+        "在现有项目状态基础上，再继续跑多少回合。",
         "1-24",
         "越小越像补跑验证；越大越适合继续做趋势观察。",
         3,
         1,
         24,
-        "More months to simulate",
+        "More rounds to simulate",
     )
     market_goal = input_default(
         "续跑市场目标标签 [balanced/buyer_market/seller_market]",
@@ -829,20 +1407,20 @@ def collect_scholar_resume_inputs(
         role_defaults = _scale_role_defaults(agent_count_guess, market_goal)
 
     buyer_quota = _prompt_int_param(
-        "未来月份强制纯买家人数",
-        "从续跑起点之后，对未来月份生效的 BUYER 配额。",
+        "未来回合强制纯买家人数",
+        "从续跑起点之后，对未来回合生效的 BUYER 配额。",
         f"0-{agent_count_guess}",
-        "越高，未来月份的需求注入越强。",
+        "越高，未来回合的需求注入越强。",
         role_defaults["BUYER"],
         0,
         agent_count_guess,
         "Future BUYER quota",
     )
     seller_quota = _prompt_int_param(
-        "未来月份强制纯卖家人数",
-        "从续跑起点之后，对未来月份生效的 SELLER 配额。",
+        "未来回合强制纯卖家人数",
+        "从续跑起点之后，对未来回合生效的 SELLER 配额。",
         f"0-{max(0, agent_count_guess - buyer_quota)}",
-        "越高，未来月份供给更松。",
+        "越高，未来回合供给更松。",
         min(role_defaults["SELLER"], max(0, agent_count_guess - buyer_quota)),
         0,
         max(0, agent_count_guess - buyer_quota),
@@ -850,17 +1428,17 @@ def collect_scholar_resume_inputs(
     )
     max_dual = max(0, agent_count_guess - buyer_quota - seller_quota)
     buyer_seller_quota = _prompt_int_param(
-        "未来月份强制买卖并行人数",
-        "对未来月份生效的 BUYER_SELLER 配额。",
+        "未来回合强制买卖并行人数",
+        "对未来回合生效的 BUYER_SELLER 配额。",
         f"0-{max_dual}",
-        "越高，置换链和跨月承接更强。",
+        "越高，置换链和跨回合承接更强。",
         min(role_defaults["BUYER_SELLER"], max_dual),
         0,
         max_dual,
         "Future BUYER_SELLER quota",
     )
     target_r_order_hint = _prompt_float_param(
-        "未来月份目标 R_order 提示值",
+        "未来回合目标 R_order 提示值",
         "用于重新估算续跑阶段的供需压力。",
         "0.20-2.50",
         "低于 1 偏买方，高于 1 偏卖方。",
@@ -870,8 +1448,8 @@ def collect_scholar_resume_inputs(
         "Future target R_order hint",
     )
     income_multiplier = _prompt_float_param(
-        "未来月份收入倍率",
-        "仅影响续跑阶段的收入缩放，不回写历史月份。",
+        "未来回合收入倍率",
+        "仅影响续跑阶段的收入缩放，不回写历史回合。",
         "0.50-2.00",
         "越低购买力越弱，越高购买力越强。",
         float(config.get("simulation.agent.income_adjustment_rate", 1.0) or 1.0),
@@ -880,14 +1458,14 @@ def collect_scholar_resume_inputs(
         "Future income multiplier",
     )
     future_force_months = _prompt_int_param(
-        "未来月份强制角色生效月数",
-        "从下一个月开始，连续多少个月启用 forced_role_mode。",
+        "未来回合强制角色生效回合数",
+        "从下一个回合开始，连续多少回合启用 forced_role_mode。",
         f"1-{extra_months}",
         "越短越像一次冲击，越长越像持续政策环境。",
         min(extra_months, 3),
         1,
         extra_months,
-        "Future forced role active months",
+        "Future forced role active rounds",
     )
     profiled_market_mode = _input_yes_no(
         "续跑阶段继续启用画像供需模式?",
@@ -898,7 +1476,7 @@ def collect_scholar_resume_inputs(
         bool(config.get("smart_agent.profiled_market_mode.hard_bucket_matcher_enabled", True)),
     )
     enable_intervention_panel = _input_yes_no(
-        "续跑阶段启用月末人工干预面板?",
+        "续跑阶段启用回合末人工干预面板?",
         bool(config.get("simulation.enable_intervention_panel", False)),
     )
     open_startup_intervention_menu = _input_yes_no(
@@ -989,11 +1567,11 @@ def collect_preplanned_developer_supply(config):
     Returns list for simulation.preplanned_interventions.
     """
     plans = []
-    use_plan = input_default("是否预排开发商投放计划(按月自动执行) [y/N]", "n").strip().lower()
+    use_plan = input_default("是否预排开发商投放计划(按回合自动执行) [y/N]", "n").strip().lower()
     if use_plan not in ("y", "yes", "1", "true"):
         return plans
 
-    month = int(input_default("投放月份", "6"))
+    month = int(input_default("投放回合", "6"))
     zone = input_default("投放区域 (A/B)", "A").strip().upper()
     if zone not in ("A", "B"):
         print("⚠️ 区域无效，自动回退 A。")
@@ -1020,7 +1598,7 @@ def collect_preplanned_developer_supply(config):
         "build_year": int(build_year),
         "size": float(size) if size is not None else None,
     })
-    print(f"✅ 已预排: 第{month}月 {zone}区 投放{count}套, {price_per_sqm:.0f}元/㎡, 学区{school_units}套")
+    print(f"✅ 已预排: 第{month}回合 {zone}区 投放{count}套, {price_per_sqm:.0f}元/㎡, 学区{school_units}套")
     return plans
 
 
@@ -1373,7 +1951,7 @@ def run_night_ops_menu():
                 subprocess.run(cmd)
             elif choice == "6":
                 run_dir = input_default("指定run目录(留空=自动找最新run_*)", "")
-                extra = input_default("追加模拟月数(extra_months)", "2")
+                extra = input_default("追加模拟回合数(extra_rounds)", "2")
                 cmd = [sys.executable, "tools/resume_from_latest.py", "--extra-months", str(int(extra))]
                 if run_dir:
                     cmd.extend(["--run-dir", run_dir])
@@ -1416,8 +1994,8 @@ def main():
         print("请选择你接下来要做的事：")
         print("1. 新建实验（推荐，真人友好引导版）")
         print("   适合对外演示、正式复现实验、快速搭建平衡 / 买方 / 卖方环境。")
-        print("2. 继续实验（继承上月状态后续跑）")
-        print("   适合验证跨月承接、趋势延续、冲击后的第二阶段反应。")
+        print("2. 继续实验（继承上回合状态后续跑）")
+        print("   适合验证跨回合承接、趋势延续、冲击后的第二阶段反应。")
         print("3. 新建实验（高级研究员配置版）")
         print("   适合研究员做更细粒度参数试验，不建议外部演示时默认使用。")
         print("4. 项目体检（Forensic Analysis）")
@@ -1556,7 +2134,7 @@ def main():
 
                 default_panel = bool(config.get('simulation.enable_intervention_panel', True))
                 panel_input = input_default(
-                    f"启用月末人工干预面板(enable_intervention_panel) [default: {'y' if default_panel else 'n'}]",
+                    f"启用回合末人工干预面板(enable_intervention_panel) [default: {'y' if default_panel else 'n'}]",
                     'y' if default_panel else 'n'
                 ).strip().lower()
                 enable_intervention_panel = panel_input in ('y', 'yes', '1', 'true')
@@ -1871,7 +2449,7 @@ def main():
 
                 default_precheck_buffer = int(temp_config.get('smart_agent.precheck_liquidity_buffer_months', 3))
                 precheck_buf_input = input(
-                    f"下单前现金缓冲(月) [default: {default_precheck_buffer}]: "
+            f"下单前现金缓冲(周期) [default: {default_precheck_buffer}]: "
                 ).strip()
                 precheck_liquidity_buffer_months = int(precheck_buf_input) if precheck_buf_input else default_precheck_buffer
                 if precheck_liquidity_buffer_months < 0:
@@ -1891,7 +2469,7 @@ def main():
 
                 default_panel = bool(temp_config.get('simulation.enable_intervention_panel', True))
                 panel_input = input_default(
-                    f"启用月末人工干预面板(enable_intervention_panel) [default: {'y' if default_panel else 'n'}]",
+                    f"启用回合末人工干预面板(enable_intervention_panel) [default: {'y' if default_panel else 'n'}]",
                     'y' if default_panel else 'n'
                 ).strip().lower()
                 enable_intervention_panel = panel_input in ('y', 'yes', '1', 'true')
@@ -1975,7 +2553,7 @@ def main():
                 print("【步骤 4/4】配置总览与确认")
                 print("=" * 60)
 
-                months = int(input_default("\n模拟月数", "12"))
+                months = int(input_default("\n模拟回合数", "12"))
 
                 print("\n配置总览:")
                 print(f"  - Agent总数: {agent_count}")
@@ -1985,17 +2563,17 @@ def main():
                           f"收入{tier_data['income_range'][0] // 1000}-{tier_data['income_range'][1] // 1000}k, "
                           f"拥房{tier_data['property_count'][0]}-{tier_data['property_count'][1]}套")
                 print(f"  - 房产总数: {property_count}")
-                print(f"  - 模拟月数: {months}")
+                print(f"  - 模拟回合数: {months}")
                 print(f"  - 随机种子: {seed_to_use or '随机'}")
                 print(f"  - 无房参与门槛: 现金≥{min_cash_observer_threshold / 10000:.1f}万元")
                 print(f"  - 房龄基准年份: {base_year}")
                 print(f"  - 有效出价下限系数: {effective_bid_floor_ratio:.2f}")
-                print(f"  - 下单前现金缓冲(月): {precheck_liquidity_buffer_months}")
+                print(f"  - 下单前现金缓冲(周期): {precheck_liquidity_buffer_months}")
                 print(f"  - 预检计入税费: {'是' if precheck_include_tax_and_fee else '否'}")
                 print(f"  - 地段权重: {location_params['location_scarcity_weight']:.2f}")
                 print(f"  - 候选地段加分: {location_params['shortlist_location_bonus_weight']:.2f}")
                 print(f"  - 跨区折价阈值: {location_params['cross_zone_discount_threshold']:.2f}")
-                print(f"  - 月末人工干预面板: {'开启' if enable_intervention_panel else '关闭'}")
+                print(f"  - 回合末人工干预面板: {'开启' if enable_intervention_panel else '关闭'}")
                 print(f"  - 全体收入调整系数: {income_adjustment_rate:.2f}")
                 print(f"  - 首付比例: {mortgage_down_payment_ratio:.2f}")
                 print(f"  - DTI上限: {mortgage_max_dti_ratio:.2f}")

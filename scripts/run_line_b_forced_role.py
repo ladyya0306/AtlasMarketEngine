@@ -30,6 +30,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.validate_line_b_profile_pack import load_profile_pack, validate_profile_pack
+from scripts.activation_governance import (
+    build_activation_governance_config,
+    evaluate_mismatch_gate,
+    export_monthly_activation_funnel,
+    export_monthly_bucket_funnel,
+    render_governance_summary,
+    write_mismatch_gate,
+)
 from scripts.line_b_library_builder import (
     build_governance_snapshot,
     load_profile_pack_from_path,
@@ -351,6 +359,10 @@ def build_plan(group_id: str, seed: int, months: int, agent_count: int) -> Dict[
             "info_delay_enabled": False,
             "info_delay_ratio": 0.00,
             "info_delay_max_months": 0,
+            "activation_governance": build_activation_governance_config(
+                activation_mode="forced",
+                gate_mode="warn",
+            ),
             "forced_role_mode": {
                 "enabled": True,
                 "apply_months": list(range(1, int(months) + 1)),
@@ -365,6 +377,10 @@ def build_plan(group_id: str, seed: int, months: int, agent_count: int) -> Dict[
             "seed": int(seed),
             "months": int(months),
             "agent_count": int(agent_count),
+            "activation_governance": {
+                "activation_mode": "forced",
+                "gate_mode": "warn",
+            },
             "forced_role_mode": {
                 "quota": dict(quota),
             },
@@ -394,7 +410,41 @@ def apply_overrides(plan: Dict[str, Any], args) -> Dict[str, Any]:
         market_cfg["initial_listing_rate"] = float(args.initial_listing_rate)
 
     smart_agent_cfg = plan.setdefault("smart_agent", {})
+    activation_governance_cfg = smart_agent_cfg.setdefault(
+        "activation_governance",
+        build_activation_governance_config(activation_mode="forced", gate_mode="warn"),
+    )
+    activation_governance_cfg.update(
+        build_activation_governance_config(
+            activation_mode=str(getattr(args, "activation_mode", "forced") or "forced"),
+            gate_mode=str(getattr(args, "governance_gate_mode", "warn") or "warn"),
+            profiled_market_required=bool(getattr(args, "governance_profiled_required", False)),
+            hard_bucket_matcher_required=bool(getattr(args, "governance_hard_bucket_required", False)),
+            hybrid_floor_enabled=bool(getattr(args, "governance_hybrid_floor_enabled", False)),
+            hybrid_floor_strategy="bucket_targeted_llm_first",
+            autofill_supply_floor=int(getattr(args, "governance_autofill_supply_floor", 0) or 0),
+            autofill_demand_floor=int(getattr(args, "governance_autofill_demand_floor", 0) or 0),
+            severe_bucket_deficit_ratio=float(
+                getattr(args, "governance_severe_bucket_deficit_ratio", 5.0) or 5.0
+            ),
+            pause_on_severe_mismatch=bool(
+                str(getattr(args, "governance_gate_mode", "warn") or "warn").strip().lower() == "pause"
+            ),
+            emit_bucket_funnel=True,
+        )
+    )
+    buyer_seller_split_cfg = smart_agent_cfg.setdefault("buyer_seller_intent_split", {})
+    if bool(getattr(args, "enable_buyer_seller_intent_split", False)):
+        buyer_seller_split_cfg["enabled"] = True
+    if bool(getattr(args, "buyer_seller_intent_split_apply_to_forced", False)):
+        buyer_seller_split_cfg["apply_to_forced"] = True
+    if str(getattr(args, "buyer_seller_intent_split_model_type", "") or "").strip():
+        buyer_seller_split_cfg["model_type"] = str(
+            getattr(args, "buyer_seller_intent_split_model_type", "fast") or "fast"
+        ).strip().lower()
     forced_cfg = smart_agent_cfg.setdefault("forced_role_mode", {})
+    resolved_activation_mode = str(activation_governance_cfg.get("activation_mode", "forced") or "forced")
+    forced_cfg["enabled"] = bool(resolved_activation_mode == "forced")
     quota_cfg = forced_cfg.setdefault("quota", {})
     if args.quota_buyer is not None:
         quota_cfg["buyer"] = max(0, int(args.quota_buyer))
@@ -424,6 +474,18 @@ def apply_overrides(plan: Dict[str, Any], args) -> Dict[str, Any]:
         )
     if args.disable_init_multi_owner_listings:
         smart_agent_cfg["init_multi_owner_listings_enabled"] = False
+    if bool(getattr(args, "disable_activation_hard_only_prefilter", False)):
+        smart_agent_cfg["activation_hard_only_prefilter"] = False
+    if getattr(args, "activation_prefilter_normal_min_cash", None) is not None:
+        plan.setdefault("decision_factors", {}).setdefault("activation", {}).setdefault("pre_filter", {}).setdefault("normal", {})
+        plan["decision_factors"]["activation"]["pre_filter"]["normal"]["min_cash"] = float(
+            args.activation_prefilter_normal_min_cash
+        )
+    if getattr(args, "activation_prefilter_normal_min_income", None) is not None:
+        plan.setdefault("decision_factors", {}).setdefault("activation", {}).setdefault("pre_filter", {}).setdefault("normal", {})
+        plan["decision_factors"]["activation"]["pre_filter"]["normal"]["min_income"] = float(
+            args.activation_prefilter_normal_min_income
+        )
     if bool(getattr(args, "enable_mock_stub_select", False)):
         smart_agent_cfg["mock_stub_select_enabled"] = True
     if bool(getattr(args, "enable_profiled_market_mode", False)):
@@ -449,6 +511,13 @@ def apply_overrides(plan: Dict[str, Any], args) -> Dict[str, Any]:
         if bool(getattr(args, "disable_hard_bucket_strict_unmapped", False)):
             profiled_cfg["hard_bucket_strict_unmapped_property"] = False
 
+    plan.setdefault("line_b_metadata", {}).setdefault("activation_governance", {})
+    plan["line_b_metadata"]["activation_governance"].update(
+        {
+            "activation_mode": resolved_activation_mode,
+            "gate_mode": str(activation_governance_cfg.get("gate_mode", "warn") or "warn"),
+        }
+    )
     plan.setdefault("line_b_metadata", {}).setdefault("override_summary", {})
     override_summary = plan["line_b_metadata"]["override_summary"]
     override_summary["income_adjustment_rate"] = agent_cfg.get("income_adjustment_rate")
@@ -464,6 +533,11 @@ def apply_overrides(plan: Dict[str, Any], args) -> Dict[str, Any]:
         "init_min_for_sale_ratio_zone_a": smart_agent_cfg.get("init_min_for_sale_ratio_zone_a"),
         "init_min_for_sale_ratio_zone_b": smart_agent_cfg.get("init_min_for_sale_ratio_zone_b"),
         "init_multi_owner_listings_enabled": smart_agent_cfg.get("init_multi_owner_listings_enabled"),
+    }
+    override_summary["activation_prefilter"] = {
+        "hard_only": smart_agent_cfg.get("activation_hard_only_prefilter", None),
+        "normal_min_cash": (((plan.get("decision_factors", {}) or {}).get("activation", {}) or {}).get("pre_filter", {}) or {}).get("normal", {}).get("min_cash"),
+        "normal_min_income": (((plan.get("decision_factors", {}) or {}).get("activation", {}) or {}).get("pre_filter", {}) or {}).get("normal", {}).get("min_income"),
     }
     override_summary["mock_stub_select_enabled"] = bool(
         smart_agent_cfg.get("mock_stub_select_enabled", False)
@@ -542,6 +616,7 @@ def analyze_db(db_path: Path, months: int = 1, run_dir: Optional[Path] = None) -
             "forced_role_mode_pure": False,
             "failure_reasons_m1": {},
             "buyer_seller_chain_modes_m1": {},
+            "buyer_seller_split_choices_m1": {},
             "normal_seller_price_adjustment_m1": _analyze_price_adjustment_rows([]),
             "normal_seller_price_adjustment_window": _analyze_price_adjustment_rows([]),
         }
@@ -636,7 +711,7 @@ def analyze_db(db_path: Path, months: int = 1, run_dir: Optional[Path] = None) -
 
         cur.execute(
             """
-            SELECT agent_id, decision, thought_process
+            SELECT agent_id, decision, thought_process, context_metrics
             FROM decision_logs
             WHERE month=1
               AND event_type='ROLE_DECISION'
@@ -646,10 +721,12 @@ def analyze_db(db_path: Path, months: int = 1, run_dir: Optional[Path] = None) -
         forced_role_counts_m1 = {role: 0 for role in ROLE_NAMES}
         forced_role_agent_ids = set()
         active_role_agent_ids = set()
+        buyer_seller_split_choices_m1: Dict[str, int] = {}
         for row in cur.fetchall() or []:
             agent_id = int(row["agent_id"] or 0)
             decision = str(row["decision"] or "").upper()
             payload = _safe_json_loads(row["thought_process"], {})
+            cur_metrics = _safe_json_loads(row["context_metrics"], {}) if "context_metrics" in row.keys() else {}
             active_role_agent_ids.add((decision, agent_id))
             if str(payload.get("trigger", "") or "").strip() == "forced_role_mode" or str(
                 payload.get("_decision_origin", "") or ""
@@ -657,6 +734,11 @@ def analyze_db(db_path: Path, months: int = 1, run_dir: Optional[Path] = None) -
                 if decision in forced_role_counts_m1 and (decision, agent_id) not in forced_role_agent_ids:
                     forced_role_counts_m1[decision] += 1
                 forced_role_agent_ids.add((decision, agent_id))
+            split_choice = str(cur_metrics.get("buyer_seller_split_choice", "") or "").strip().lower()
+            if split_choice:
+                buyer_seller_split_choices_m1[split_choice] = int(
+                    buyer_seller_split_choices_m1.get(split_choice, 0) or 0
+                ) + 1
 
         failure_reasons_m1 = _fetch_top_counts(
             cur,
@@ -732,6 +814,7 @@ def analyze_db(db_path: Path, months: int = 1, run_dir: Optional[Path] = None) -
         "forced_role_mode_pure": bool(forced_total == role_total and role_total > 0),
         "failure_reasons_m1": failure_reasons_m1,
         "buyer_seller_chain_modes_m1": buyer_seller_chain_modes_m1,
+        "buyer_seller_split_choices_m1": {k: int(v) for k, v in buyer_seller_split_choices_m1.items()},
         "normal_seller_price_adjustment_m1": _analyze_price_adjustment_rows(price_adjustment_rows),
         "normal_seller_price_adjustment_window": _analyze_price_adjustment_rows(price_adjustment_window_rows),
     }
@@ -1008,6 +1091,9 @@ def run_case(
     plan = apply_overrides(plan, args)
     governance_snapshot_path = ""
     governance_identity_hash = ""
+    governance_snapshot: Dict[str, Any] = {}
+    mismatch_gate_path = ""
+    mismatch_gate: Dict[str, Any] = {}
     profiled_cfg = (
         (plan.get("smart_agent", {}) or {}).get("profiled_market_mode", {}) or {}
     )
@@ -1040,6 +1126,19 @@ def run_case(
                     "identity_hash": governance_identity_hash,
                 }
             )
+    activation_governance_cfg = (
+        (plan.get("smart_agent", {}) or {}).get("activation_governance", {}) or {}
+    )
+    mismatch_gate = evaluate_mismatch_gate(
+        governance_snapshot=governance_snapshot,
+        activation_governance=activation_governance_cfg,
+        profiled_market_enabled=bool(profiled_cfg.get("enabled", False)),
+        hard_bucket_matcher_enabled=bool(profiled_cfg.get("hard_bucket_matcher_enabled", False)),
+    )
+    mismatch_gate_path = write_mismatch_gate(case_dir / "mismatch_gate.json", mismatch_gate)
+    print(render_governance_summary(mismatch_gate))
+    plan.setdefault("line_b_metadata", {}).setdefault("governance", {})
+    plan["line_b_metadata"]["governance"]["mismatch_gate_path"] = mismatch_gate_path
     plan_path = case_dir / "plan.yaml"
     _write_yaml(plan_path, plan)
 
@@ -1069,17 +1168,28 @@ def run_case(
     env = dict(os.environ)
     prev_py_path = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(ROOT) if not prev_py_path else f"{ROOT};{prev_py_path}"
-
-    with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open(
-        "w", encoding="utf-8"
-    ) as stderr_handle:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(ROOT),
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            env=env,
+    blocked_by_governance = bool(
+        str(mismatch_gate.get("gate_mode", "warn") or "warn") == "pause"
+        and str(mismatch_gate.get("governance_status", "pass") or "pass") == "block"
+    )
+    if blocked_by_governance:
+        stdout_path.write_text(
+            render_governance_summary(mismatch_gate) + "\n[governance] case blocked before simulation.\n",
+            encoding="utf-8",
         )
+        stderr_path.write_text("", encoding="utf-8")
+        proc = subprocess.CompletedProcess(cmd, returncode=2)
+    else:
+        with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as stderr_handle:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(ROOT),
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                env=env,
+            )
 
     db_raw = _extract_db_from_stdout(stdout_path) or ""
     db_path: Optional[Path] = None
@@ -1111,6 +1221,27 @@ def run_case(
         case_name=case_name,
         passed=bool(gate["overall_pass"]),
     )
+    monthly_activation_funnel_path = export_monthly_activation_funnel(
+        db_path=db_path or Path("__missing__.db"),
+        months=int(months),
+        output_path=case_dir / "monthly_activation_funnel.csv",
+        run_id=case_name,
+        group_id=str(group_id),
+        shock_id=str(shock_type),
+        activation_mode=str(activation_governance_cfg.get("activation_mode", "forced") or "forced"),
+        governance_status=str(mismatch_gate.get("governance_status", "pass") or "pass"),
+    )
+    monthly_bucket_funnel_path = export_monthly_bucket_funnel(
+        db_path=db_path or Path("__missing__.db"),
+        months=int(months),
+        output_path=case_dir / "monthly_bucket_funnel.csv",
+        run_id=case_name,
+        group_id=str(group_id),
+        shock_id=str(shock_type),
+        activation_mode=str(activation_governance_cfg.get("activation_mode", "forced") or "forced"),
+        governance_status=str(mismatch_gate.get("governance_status", "pass") or "pass"),
+        governance_snapshot=governance_snapshot,
+    )
 
     metadata_path = run_dir / "metadata.json" if run_dir else None
     return {
@@ -1118,7 +1249,7 @@ def run_case(
         "seed": int(seed),
         "months": int(months),
         "agent_count": int(agent_count),
-        "status": "success" if proc.returncode == 0 else "failed",
+        "status": "blocked" if blocked_by_governance else ("success" if proc.returncode == 0 else "failed"),
         "exit_code": int(proc.returncode),
         "case_name": case_name,
         "case_dir": str(case_dir.resolve()),
@@ -1129,6 +1260,7 @@ def run_case(
         "run_dir": str(run_dir.resolve()) if run_dir else "",
         "metadata_path": str(metadata_path.resolve()) if metadata_path and metadata_path.exists() else "",
         "forced_role_mode": dict(plan["smart_agent"]["forced_role_mode"]),
+        "activation_governance": dict(activation_governance_cfg),
         "metrics": metrics,
         "error_counts": error_counts,
         "gate": gate,
@@ -1137,6 +1269,10 @@ def run_case(
         "archive_dir": str(archive_dir.resolve()),
         "governance_snapshot_path": governance_snapshot_path,
         "governance_identity_hash": governance_identity_hash,
+        "mismatch_gate": mismatch_gate,
+        "mismatch_gate_path": mismatch_gate_path,
+        "monthly_activation_funnel_path": monthly_activation_funnel_path,
+        "monthly_bucket_funnel_path": monthly_bucket_funnel_path,
     }
 
 
@@ -1195,6 +1331,55 @@ def _collect_case_run(
         passed=bool(gate.get("overall_pass", False)),
     )
     governance_meta = meta.get("governance", {}) if isinstance(meta.get("governance", {}), dict) else {}
+    governance_snapshot_path = str(governance_meta.get("snapshot_path", "") or "")
+    governance_snapshot = {}
+    if governance_snapshot_path:
+        snapshot_file = Path(governance_snapshot_path)
+        if snapshot_file.exists():
+            governance_snapshot = _safe_json_loads(snapshot_file.read_text(encoding="utf-8"), {})
+    activation_governance = (
+        meta.get("activation_governance", {}) if isinstance(meta.get("activation_governance", {}), dict) else {}
+    )
+    mismatch_gate_path = str(governance_meta.get("mismatch_gate_path", "") or "")
+    mismatch_gate = {}
+    if mismatch_gate_path and Path(mismatch_gate_path).exists():
+        mismatch_gate = _safe_json_loads(Path(mismatch_gate_path).read_text(encoding="utf-8"), {})
+    elif governance_snapshot:
+        profiled_cfg = (plan.get("smart_agent", {}) or {}).get("profiled_market_mode", {}) or {}
+        mismatch_gate = evaluate_mismatch_gate(
+            governance_snapshot=governance_snapshot,
+            activation_governance=activation_governance,
+            profiled_market_enabled=bool(profiled_cfg.get("enabled", False)),
+            hard_bucket_matcher_enabled=bool(profiled_cfg.get("hard_bucket_matcher_enabled", False)),
+        )
+        mismatch_gate_path = write_mismatch_gate(case_dir / "mismatch_gate.json", mismatch_gate)
+    monthly_activation_funnel_path = export_monthly_activation_funnel(
+        db_path=db_path or Path("__missing__.db"),
+        months=int(months),
+        output_path=case_dir / "monthly_activation_funnel.csv",
+        run_id=case_dir.name,
+        group_id=str(group_id),
+        shock_id=str(shock_type),
+        activation_mode=str(activation_governance.get("activation_mode", "forced") or "forced"),
+        governance_status=str(mismatch_gate.get("governance_status", "pass") or "pass"),
+    )
+    monthly_bucket_funnel_path = export_monthly_bucket_funnel(
+        db_path=db_path or Path("__missing__.db"),
+        months=int(months),
+        output_path=case_dir / "monthly_bucket_funnel.csv",
+        run_id=case_dir.name,
+        group_id=str(group_id),
+        shock_id=str(shock_type),
+        activation_mode=str(activation_governance.get("activation_mode", "forced") or "forced"),
+        governance_status=str(mismatch_gate.get("governance_status", "pass") or "pass"),
+        governance_snapshot=governance_snapshot,
+    )
+    if (
+        status == "failed"
+        and str(mismatch_gate.get("gate_mode", "warn") or "warn") == "pause"
+        and str(mismatch_gate.get("governance_status", "pass") or "pass") == "block"
+    ):
+        status = "blocked"
     return {
         "group": group_id,
         "seed": int(seed),
@@ -1211,14 +1396,19 @@ def _collect_case_run(
         "run_dir": str(run_dir.resolve()) if run_dir else "",
         "metadata_path": str(metadata_path.resolve()) if metadata_path and metadata_path.exists() else "",
         "forced_role_mode": dict(plan.get("smart_agent", {}).get("forced_role_mode", {}) or {}),
+        "activation_governance": dict(activation_governance),
         "metrics": metrics,
         "error_counts": error_counts,
         "gate": gate,
         "root_causes": root_causes,
         "single_variable_tuning": tuning,
         "archive_dir": archive_dir,
-        "governance_snapshot_path": str(governance_meta.get("snapshot_path", "") or ""),
+        "governance_snapshot_path": governance_snapshot_path,
         "governance_identity_hash": str(governance_meta.get("identity_hash", "") or ""),
+        "mismatch_gate": mismatch_gate,
+        "mismatch_gate_path": mismatch_gate_path,
+        "monthly_activation_funnel_path": monthly_activation_funnel_path,
+        "monthly_bucket_funnel_path": monthly_bucket_funnel_path,
     }
 
 
@@ -1296,7 +1486,8 @@ def write_batch_outputs(
         "baseline_batch_dir": str(baseline_batch_dir or ""),
         "run_count": len(runs),
         "success_count": sum(1 for item in runs if item["status"] == "success"),
-        "failed_count": sum(1 for item in runs if item["status"] != "success"),
+        "failed_count": sum(1 for item in runs if item["status"] not in {"success", "blocked"}),
+        "blocked_count": sum(1 for item in runs if item["status"] == "blocked"),
         "pass_gate_count": sum(1 for item in runs if bool(item["gate"]["overall_pass"])),
         "fail_gate_count": sum(1 for item in runs if not bool(item["gate"]["overall_pass"])),
         "group_summary": group_summary,
@@ -1318,15 +1509,19 @@ def write_batch_outputs(
         f"- baseline_batch_dir: `{baseline_batch_dir or '-'}`",
         "- L0口径: `simulation_run.log` 的 `Init supply coverage snapshot`；缺失时回退到 `properties_market(listing_month=0,status='for_sale')`",
         "",
-        "| 组别 | seed | 状态 | Gate | profile_pass | boundary_pass | directional_pass | L0 | B0_role | B0_order | R_role | R_order | matches | orders | tx | err_total | 根因 |",
-        "| --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| 组别 | seed | 状态 | activation_mode | governance | Gate | profile_pass | boundary_pass | directional_pass | L0 | B0_role | B0_order | R_role | R_order | matches | orders | tx | err_total | 根因 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for run in runs:
         metrics = run["metrics"]
         gate = run["gate"]
         roots = ", ".join(run.get("root_causes", []) or []) or "-"
+        activation_governance = run.get("activation_governance", {}) or {}
+        mismatch_gate = run.get("mismatch_gate", {}) or {}
         lines.append(
             f"| {run['group']} | {run['seed']} | {run['status']} | "
+            f"{activation_governance.get('activation_mode', '-') or '-'} | "
+            f"{mismatch_gate.get('governance_status', '-') or '-'} | "
             f"{'PASS' if gate['overall_pass'] else 'FAIL'} | "
             f"{bool(gate.get('profile_pass', False))} | "
             f"{bool(gate.get('boundary_pass', False))} | "
@@ -1357,6 +1552,9 @@ def main() -> int:
     parser.add_argument("--init-min-for-sale-ratio-zone-a", type=float, default=None)
     parser.add_argument("--init-min-for-sale-ratio-zone-b", type=float, default=None)
     parser.add_argument("--disable-init-multi-owner-listings", action="store_true")
+    parser.add_argument("--disable-activation-hard-only-prefilter", action="store_true")
+    parser.add_argument("--activation-prefilter-normal-min-cash", type=float, default=None)
+    parser.add_argument("--activation-prefilter-normal-min-income", type=float, default=None)
     parser.add_argument("--enable-profiled-market-mode", action="store_true")
     parser.add_argument("--profile-pack-path", default="")
     parser.add_argument("--profile-background-library-path", default="")
@@ -1365,6 +1563,17 @@ def main() -> int:
     parser.add_argument("--hard-bucket-include-soft-buckets", action="store_true")
     parser.add_argument("--hard-bucket-require-profiled-buyer", action="store_true")
     parser.add_argument("--disable-hard-bucket-strict-unmapped", action="store_true")
+    parser.add_argument("--activation-mode", choices=["forced", "hybrid", "natural"], default="forced")
+    parser.add_argument("--governance-gate-mode", choices=["warn", "pause", "autofill"], default="warn")
+    parser.add_argument("--governance-profiled-required", action="store_true")
+    parser.add_argument("--governance-hard-bucket-required", action="store_true")
+    parser.add_argument("--governance-hybrid-floor-enabled", action="store_true")
+    parser.add_argument("--governance-autofill-supply-floor", type=int, default=0)
+    parser.add_argument("--governance-autofill-demand-floor", type=int, default=0)
+    parser.add_argument("--governance-severe-bucket-deficit-ratio", type=float, default=5.0)
+    parser.add_argument("--enable-buyer-seller-intent-split", action="store_true")
+    parser.add_argument("--buyer-seller-intent-split-apply-to-forced", action="store_true")
+    parser.add_argument("--buyer-seller-intent-split-model-type", default="")
     parser.add_argument("--enable-mock-stub-select", action="store_true")
     parser.add_argument("--skip-profile-pack-validation", action="store_true")
     parser.add_argument("--no-stop-on-v3-fail", action="store_true")

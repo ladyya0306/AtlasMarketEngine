@@ -17,11 +17,22 @@ import yaml
 from agent_behavior import (
     apply_event_effects,
     batched_determine_role_async,
+    build_activation_lifecycle_packet,
+    build_behavior_modifier,
     calculate_activation_probability,
+    derive_decision_urgency,
+    determine_buyer_seller_chain_mode_async,
     determine_listing_strategy,
     generate_buyer_preference,
     select_monthly_event,
     should_agent_exit_market,
+    TIMING_ROLE_BUY_NOW,
+    TIMING_ROLE_NEED_WAIT,
+    TIMING_ROLE_OBSERVE_WAIT,
+    TIMING_ROLE_SELL_THEN_BUY,
+    TIMING_ROLE_SELL_NOW,
+    VALID_TIMING_ROLES,
+    VALID_URGENCY_LEVELS,
 )
 from config.agent_templates import get_template_for_tier
 from config.agent_tiers import AGENT_TIER_CONFIG
@@ -115,6 +126,83 @@ class AgentService:
             ).lower(),
         }
 
+    def _buyer_seller_intent_split_cfg(self) -> Dict[str, object]:
+        raw_cfg = self.config.get(
+            "smart_agent.buyer_seller_intent_split",
+            self.config.get("buyer_seller_intent_split", {}),
+        )
+        if not isinstance(raw_cfg, dict):
+            raw_cfg = {}
+        enabled = self._as_bool(
+            self.config.get(
+                "smart_agent.buyer_seller_intent_split.enabled",
+                raw_cfg.get("enabled", False),
+            ),
+            False,
+        )
+        apply_to_forced = self._as_bool(
+            self.config.get(
+                "smart_agent.buyer_seller_intent_split.apply_to_forced",
+                raw_cfg.get("apply_to_forced", False),
+            ),
+            False,
+        )
+        model_type = str(
+            self.config.get(
+                "smart_agent.buyer_seller_intent_split.model_type",
+                raw_cfg.get("model_type", "fast"),
+            )
+            or "fast"
+        ).strip().lower()
+        decision_profiles_raw = self.config.get(
+            "smart_agent.buyer_seller_intent_split.decision_profiles",
+            raw_cfg.get("decision_profiles", ["normal", "smart"]),
+        )
+        if isinstance(decision_profiles_raw, str):
+            decision_profiles = {
+                token.strip().lower()
+                for token in decision_profiles_raw.split(",")
+                if token.strip()
+            }
+        else:
+            decision_profiles = {
+                str(token or "").strip().lower()
+                for token in list(decision_profiles_raw or [])
+                if str(token or "").strip()
+            }
+        if not decision_profiles:
+            decision_profiles = {"normal", "smart"}
+        return {
+            "enabled": bool(enabled),
+            "apply_to_forced": bool(apply_to_forced),
+            "model_type": model_type if model_type else "fast",
+            "decision_profiles": decision_profiles,
+        }
+
+    def _should_split_buyer_seller_intent(
+        self,
+        *,
+        decision_origin: str,
+        decision_profile: str,
+        decision_payload: Dict,
+    ) -> bool:
+        cfg = self._buyer_seller_intent_split_cfg()
+        if not bool(cfg.get("enabled", False)):
+            return False
+        if str(decision_origin or "").strip() == "forced_role_mode" and not bool(cfg.get("apply_to_forced", False)):
+            return False
+        if str(decision_profile or "normal").strip().lower() not in set(
+            cfg.get("decision_profiles", {"normal", "smart"})
+        ):
+            return False
+        # Only re-ask ambiguous BUYER_SELLER cases. If the first-stage role decision
+        # already gave an explicit chain order, asking again tends to over-correct.
+        explicit_chain_mode = str((decision_payload or {}).get("chain_mode", "") or "").strip().lower()
+        if explicit_chain_mode in {"buy_first", "sell_first"}:
+            return False
+        timing_role = str((decision_payload or {}).get("timing_role", "") or "").strip().lower()
+        return timing_role not in {TIMING_ROLE_BUY_NOW, TIMING_ROLE_SELL_THEN_BUY}
+
     @staticmethod
     def _normalize_month_list(raw_value) -> list[int]:
         if raw_value in (None, "", []):
@@ -150,6 +238,18 @@ class AgentService:
         except Exception:
             value = 0.30
         return max(0.0, min(1.0, float(value)))
+
+    def _min_holding_months_before_resale(self) -> int:
+        try:
+            value = int(
+                self.config.get(
+                    "smart_agent.min_holding_months_before_resale",
+                    self.config.get("min_holding_months_before_resale", 12),
+                )
+            )
+        except Exception:
+            value = 12
+        return max(0, int(value))
 
     def _init_multi_owner_listings_enabled(self) -> bool:
         return self._as_bool(
@@ -203,6 +303,37 @@ class AgentService:
             "raw": dict(raw_cfg),
         }
 
+    def _activation_governance_cfg(self, month: int) -> Dict[str, Any]:
+        raw_cfg = self.config.get(
+            "smart_agent.activation_governance",
+            self.config.get("activation_governance", {}),
+        )
+        if not isinstance(raw_cfg, dict):
+            raw_cfg = {}
+        forced_cfg = self._forced_role_mode_cfg(month=int(month))
+        inferred_mode = "forced" if bool(forced_cfg.get("enabled", False)) else "natural"
+        activation_mode = str(raw_cfg.get("activation_mode", inferred_mode) or inferred_mode).strip().lower()
+        if activation_mode not in {"forced", "hybrid", "natural"}:
+            activation_mode = inferred_mode
+        gate_mode = str(raw_cfg.get("gate_mode", "warn") or "warn").strip().lower() or "warn"
+        if gate_mode not in {"warn", "pause", "autofill"}:
+            gate_mode = "warn"
+        return {
+            "enabled": self._as_bool(raw_cfg.get("enabled", True), True),
+            "activation_mode": activation_mode,
+            "gate_mode": gate_mode,
+            "profiled_market_required": self._as_bool(raw_cfg.get("profiled_market_required", False), False),
+            "hard_bucket_matcher_required": self._as_bool(raw_cfg.get("hard_bucket_matcher_required", False), False),
+            "hybrid_floor_enabled": self._as_bool(raw_cfg.get("hybrid_floor_enabled", False), False),
+            "hybrid_floor_strategy": str(raw_cfg.get("hybrid_floor_strategy", "bucket_targeted_llm_first") or "bucket_targeted_llm_first"),
+            "autofill_supply_floor": max(0, int(raw_cfg.get("autofill_supply_floor", 0) or 0)),
+            "autofill_demand_floor": max(0, int(raw_cfg.get("autofill_demand_floor", 0) or 0)),
+            "severe_bucket_deficit_ratio": float(raw_cfg.get("severe_bucket_deficit_ratio", 5.0) or 5.0),
+            "pause_on_severe_mismatch": self._as_bool(raw_cfg.get("pause_on_severe_mismatch", False), False),
+            "emit_bucket_funnel": self._as_bool(raw_cfg.get("emit_bucket_funnel", True), True),
+            "raw": dict(raw_cfg),
+        }
+
     def _profiled_market_mode_cfg(self) -> Dict[str, Any]:
         raw_cfg = self.config.get(
             "smart_agent.profiled_market_mode",
@@ -248,7 +379,7 @@ class AgentService:
             return {}
         inline_pack = mode_cfg.get("profile_pack_inline") or {}
         if isinstance(inline_pack, dict) and inline_pack:
-            return inline_pack
+            return self._normalize_profiled_market_pack_definition(inline_pack)
 
         pack_path = str(mode_cfg.get("profile_pack_path", "") or "").strip()
         if not pack_path:
@@ -269,10 +400,11 @@ class AgentService:
             pack = payload.get("profiled_market_mode", payload)
             if not isinstance(pack, dict):
                 pack = {}
-            self._profiled_market_pack_cache = dict(pack)
+            normalized_pack = self._normalize_profiled_market_pack_definition(pack)
+            self._profiled_market_pack_cache = dict(normalized_pack)
             self._profiled_market_pack_cache_key = cache_key
             logger.info(f"profiled_market_mode loaded profile pack: {resolved}")
-            return dict(pack)
+            return dict(normalized_pack)
         except Exception as exc:
             logger.warning(f"Failed loading profiled_market profile pack {resolved}: {exc}")
             return {}
@@ -330,6 +462,112 @@ class AgentService:
         except Exception:
             return float(default_value)
 
+    @staticmethod
+    def _normalize_profiled_zone_target(raw_zone: Any) -> str:
+        text = str(raw_zone or "").strip()
+        upper = text.upper()
+        if upper in {"A", "B"}:
+            return upper
+        lowered = text.lower()
+        if lowered in {"core", "sub_core"}:
+            return "A"
+        if lowered in {"peripheral", "outer", "suburb"}:
+            return "B"
+        return text
+
+    @staticmethod
+    def _normalize_profiled_preference_type_target(raw_value: Any) -> str:
+        text = str(raw_value or "").strip().upper()
+        if text in {"JUST", "IMPROVE"}:
+            return text
+        if text in {"STARTER", "STARTER_UPGRADE"}:
+            return "JUST"
+        if text in {"LUXURY", "SENIOR_FRIENDLY"}:
+            return "IMPROVE"
+        return text
+
+    def _normalize_profiled_agent_bucket_definition(
+        self,
+        raw_bucket: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(raw_bucket, dict):
+            return {}
+        bucket = dict(raw_bucket)
+        agent_profile = bucket.get("agent_profile", {}) or {}
+        story_profile = bucket.get("story_profile", {}) or {}
+        preference_profile = dict(bucket.get("preference_profile", {}) or {})
+        runtime_profile = dict(bucket.get("runtime_profile", {}) or {})
+        initialization_constraints = dict(bucket.get("initialization_constraints", {}) or {})
+        budget_profile = dict(bucket.get("budget_profile", {}) or {})
+        if preference_profile.get("target_zone") not in (None, ""):
+            preference_profile["target_zone"] = self._normalize_profiled_zone_target(
+                preference_profile.get("target_zone")
+            )
+        if preference_profile.get("property_type_target") not in (None, ""):
+            preference_profile["property_type_target"] = self._normalize_profiled_preference_type_target(
+                preference_profile.get("property_type_target")
+            )
+        bucket["agent_profile"] = dict(agent_profile) if isinstance(agent_profile, dict) else {}
+        bucket["story_profile"] = dict(story_profile) if isinstance(story_profile, dict) else {}
+        bucket["preference_profile"] = preference_profile
+        bucket["runtime_profile"] = runtime_profile
+        bucket["initialization_constraints"] = initialization_constraints
+        bucket["budget_profile"] = budget_profile
+        return bucket
+
+    def _normalize_profiled_property_bucket_definition(
+        self,
+        raw_bucket: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(raw_bucket, dict):
+            return {}
+        bucket = dict(raw_bucket)
+        market_profile = dict(bucket.get("market_profile", {}) or {})
+        property_profile = dict(bucket.get("property_profile", {}) or {})
+        if market_profile:
+            bucket.update({k: v for k, v in market_profile.items() if k not in (None, "")})
+        zone_value = bucket.get("zone", property_profile.get("zone_tier"))
+        if zone_value not in (None, ""):
+            bucket["zone"] = self._normalize_profiled_zone_target(zone_value)
+        type_bucket = bucket.get("property_type_bucket")
+        if type_bucket in (None, ""):
+            seg = str(property_profile.get("product_segment", "") or "").strip().lower()
+            if seg in {"starter", "starter_upgrade"}:
+                type_bucket = "JUST"
+            elif seg in {"improve", "luxury", "senior_friendly"}:
+                type_bucket = "IMPROVE"
+        if type_bucket not in (None, ""):
+            bucket["property_type_bucket"] = self._normalize_profiled_preference_type_target(type_bucket)
+        school_tier = str(property_profile.get("school_tier", "") or "").strip().lower()
+        if bucket.get("is_school_district") is None and school_tier:
+            bucket["is_school_district"] = school_tier in {"general_school", "strong_school"}
+        bucket["market_profile"] = market_profile
+        bucket["property_profile"] = property_profile
+        return bucket
+
+    def _normalize_profiled_market_pack_definition(
+        self,
+        raw_pack: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not isinstance(raw_pack, dict):
+            return {}
+        pack = dict(raw_pack)
+        agent_bucket_defs = pack.get("agent_profile_buckets", {}) or {}
+        if isinstance(agent_bucket_defs, dict):
+            pack["agent_profile_buckets"] = {
+                str(bucket_id): self._normalize_profiled_agent_bucket_definition(raw_bucket)
+                for bucket_id, raw_bucket in agent_bucket_defs.items()
+                if str(bucket_id).strip()
+            }
+        property_bucket_defs = pack.get("property_profile_buckets", {}) or {}
+        if isinstance(property_bucket_defs, dict):
+            pack["property_profile_buckets"] = {
+                str(bucket_id): self._normalize_profiled_property_bucket_definition(raw_bucket)
+                for bucket_id, raw_bucket in property_bucket_defs.items()
+                if str(bucket_id).strip()
+            }
+        return pack
+
     def _build_profiled_agent_bucket_assignments(
         self,
         agent_count: int,
@@ -355,6 +593,41 @@ class AgentService:
         for idx in range(min(len(assignments), len(expanded))):
             assignments[idx] = expanded[idx]
         return assignments, normalized_defs
+
+    def _resolve_profiled_initial_property_target(
+        self,
+        default_target_props: int,
+        bucket_id: Optional[str],
+        bucket_defs: Dict[str, Dict[str, Any]],
+    ) -> int:
+        target_props = max(0, int(default_target_props or 0))
+        bid = str(bucket_id or "").strip()
+        if not bid:
+            return target_props
+        bucket = bucket_defs.get(bid, {}) or {}
+        if not isinstance(bucket, dict):
+            return target_props
+        init_constraints = bucket.get("initialization_constraints", {}) or {}
+        if bool(init_constraints.get("preserve_no_home", False)):
+            return 0
+        role_side = str(bucket.get("role_side", "") or "").strip().lower()
+        story_profile = bucket.get("story_profile", {}) or {}
+        housing_stage = str(story_profile.get("housing_stage", "") or "").strip().lower()
+        purchase_motive = str(story_profile.get("purchase_motive_primary", "") or "").strip().lower()
+        no_home_stages = {
+            "starter_no_home",
+            "no_home_first_purchase",
+            "starter_entry",
+        }
+        no_home_motives = {
+            "starter_home",
+            "starter_no_home",
+            "rent_to_buy",
+            "new_family_first_home",
+        }
+        if role_side == "buyer" and (housing_stage in no_home_stages or purchase_motive in no_home_motives):
+            return 0
+        return target_props
 
     def _profiled_external_shock_cfg(self) -> Dict[str, Any]:
         raw = self.config.get("simulation.agent.external_shock_operator", {}) or {}
@@ -480,6 +753,15 @@ class AgentService:
                 except Exception:
                     pass
 
+        agent_profile = bucket.get("agent_profile", {}) or {}
+        setattr(agent, "profile_agent_profile", dict(agent_profile) if isinstance(agent_profile, dict) else {})
+        initialization_constraints = bucket.get("initialization_constraints", {}) or {}
+        setattr(
+            agent,
+            "profile_initialization_constraints",
+            dict(initialization_constraints) if isinstance(initialization_constraints, dict) else {},
+        )
+
         story_profile = bucket.get("story_profile", {}) or {}
         if isinstance(story_profile, dict) and story_profile:
             for attr in (
@@ -497,7 +779,9 @@ class AgentService:
         preference_profile = bucket.get("preference_profile", {}) or {}
         if isinstance(preference_profile, dict):
             if preference_profile.get("target_zone"):
-                agent.preference.target_zone = str(preference_profile.get("target_zone"))
+                agent.preference.target_zone = self._normalize_profiled_zone_target(
+                    preference_profile.get("target_zone")
+                )
             if preference_profile.get("need_school_district") is not None:
                 agent.preference.need_school_district = bool(preference_profile.get("need_school_district"))
             if preference_profile.get("min_bedrooms") is not None:
@@ -505,6 +789,14 @@ class AgentService:
                     agent.preference.min_bedrooms = max(1, int(preference_profile.get("min_bedrooms")))
                 except Exception:
                     pass
+            if preference_profile.get("property_type_target") not in (None, ""):
+                setattr(
+                    agent.preference,
+                    "property_type_target",
+                    self._normalize_profiled_preference_type_target(
+                        preference_profile.get("property_type_target")
+                    ),
+                )
 
         if isinstance(budget_profile, dict):
             max_price_range = budget_profile.get("max_price_range")
@@ -525,6 +817,8 @@ class AgentService:
         return {
             "bucket_id": str(bucket_id),
             "role_side": str(bucket.get("role_side", "") or ""),
+            "agent_profile": dict(agent_profile) if isinstance(agent_profile, dict) else {},
+            "initialization_constraints": dict(initialization_constraints) if isinstance(initialization_constraints, dict) else {},
             "persona_generation_mode": persona_generation_mode,
             "source": "profiled_market_mode",
         }
@@ -618,11 +912,146 @@ class AgentService:
     @staticmethod
     def _normalize_property_type_bucket(raw_type: Any) -> str:
         text = str(raw_type or "").strip().lower()
+        if any(token in text for token in ("luxury", "豪宅", "别墅", "大平层", "顶豪", "preservation")):
+            return "LUXURY"
         if any(token in text for token in ("improve", "改善", "large", "大户")):
             return "IMPROVE"
         if any(token in text for token in ("just", "small", "刚需", "小户")):
             return "JUST"
         return "UNKNOWN"
+
+    @staticmethod
+    def _range_distance(value: float, low: float, high: float) -> float:
+        if low <= value <= high:
+            return 0.0
+        if value < low:
+            return float(low - value)
+        return float(value - high)
+
+    def _infer_fallback_canonical_target_bucket_id(
+        self,
+        prop: Dict[str, Any],
+        property_bucket_defs: Dict[str, Dict[str, Any]],
+    ) -> str:
+        zone = str(prop.get("zone", "") or "").strip().upper()
+        school = bool(prop.get("is_school_district", False))
+        prop_type_bucket = self._normalize_property_type_bucket(prop.get("property_type"))
+        try:
+            area = float(prop.get("building_area", 0.0) or 0.0)
+        except Exception:
+            area = 0.0
+        try:
+            price = float(prop.get("base_value", 0.0) or 0.0)
+        except Exception:
+            price = 0.0
+        try:
+            quality = float(prop.get("quality", 0.0) or 0.0)
+        except Exception:
+            quality = 0.0
+        try:
+            bedrooms = float(prop.get("bedrooms", 0.0) or 0.0)
+        except Exception:
+            bedrooms = 0.0
+
+        best_bucket_id = ""
+        best_score = float("-inf")
+        for bucket_id, raw_bucket in (property_bucket_defs or {}).items():
+            if not isinstance(raw_bucket, dict):
+                continue
+            bid = str(bucket_id or "").strip()
+            if not bid:
+                continue
+            bucket_zone = str(raw_bucket.get("zone", "") or "").strip().upper()
+            bucket_school = raw_bucket.get("is_school_district")
+            bucket_type = str(raw_bucket.get("property_type_bucket", "") or "").strip().upper()
+            if bucket_zone and zone and bucket_zone != zone:
+                continue
+            if bucket_school is not None and bool(bucket_school) != school:
+                continue
+            score = 0.0
+            if bucket_zone == zone:
+                score += 8.0
+            if bucket_school is not None and bool(bucket_school) == school:
+                score += 6.0
+            if prop_type_bucket == bucket_type:
+                score += 6.0
+            elif prop_type_bucket == "LUXURY" and bucket_type == "IMPROVE":
+                score += 2.0
+            elif prop_type_bucket == "UNKNOWN":
+                score += 1.0
+            else:
+                score -= 3.0
+
+            area_low, area_high = self._safe_int_range(raw_bucket.get("building_area_range"), 0, 0)
+            price_low, price_high = self._safe_int_range(raw_bucket.get("price_range"), 0, 0)
+            quality_low, quality_high = self._safe_int_range(raw_bucket.get("quality_range"), 0, 0)
+            bedroom_low, bedroom_high = self._safe_int_range(raw_bucket.get("bedroom_range"), 0, 0)
+
+            if area_high > 0:
+                score -= min(6.0, self._range_distance(area, float(area_low), float(area_high)) / 20.0)
+            if price_high > 0:
+                score -= min(8.0, self._range_distance(price, float(price_low), float(price_high)) / 1_000_000.0)
+            if quality_high > 0:
+                score -= min(3.0, self._range_distance(quality, float(quality_low), float(quality_high)))
+            if bedroom_high > 0:
+                score -= min(3.0, self._range_distance(bedrooms, float(bedroom_low), float(bedroom_high)))
+
+            if score > best_score:
+                best_score = score
+                best_bucket_id = bid
+        return best_bucket_id
+
+    @staticmethod
+    def _build_runtime_fallback_band_label(
+        value: float,
+        low: float,
+        high: float,
+        *,
+        prefix: str,
+    ) -> str:
+        if high <= 0:
+            return f"{prefix}_UNK"
+        midpoint = (float(low) + float(high)) / 2.0
+        if value < float(low):
+            return f"{prefix}_BELOW"
+        if value > float(high):
+            return f"{prefix}_ABOVE"
+        if value <= midpoint:
+            return f"{prefix}_LOW"
+        return f"{prefix}_HIGH"
+
+    def _build_runtime_fallback_bucket_id(
+        self,
+        *,
+        prop: Dict[str, Any],
+        fallback_prefix: str,
+        canonical_target_bucket_id: str,
+        property_bucket_defs: Dict[str, Dict[str, Any]],
+    ) -> str:
+        zone = str(prop.get("zone", "") or "").strip().upper() or "UNK"
+        school = "SCHOOL" if bool(prop.get("is_school_district", False)) else "NOSCHOOL"
+        type_bucket = self._normalize_property_type_bucket(prop.get("property_type"))
+        base_bucket = str(canonical_target_bucket_id or "").strip()
+        if not base_bucket:
+            base_bucket = f"{zone}_{school}_{type_bucket}"
+
+        bucket_def = {}
+        if canonical_target_bucket_id:
+            bucket_def = (property_bucket_defs or {}).get(str(canonical_target_bucket_id), {}) or {}
+        area_low, area_high = self._safe_int_range((bucket_def or {}).get("building_area_range"), 0, 0)
+        price_low, price_high = self._safe_int_range((bucket_def or {}).get("price_range"), 0, 0)
+        try:
+            area = float(prop.get("building_area", 0.0) or 0.0)
+        except Exception:
+            area = 0.0
+        try:
+            price = float(prop.get("base_value", 0.0) or 0.0)
+        except Exception:
+            price = 0.0
+
+        area_band = self._build_runtime_fallback_band_label(area, float(area_low), float(area_high), prefix="AREA")
+        price_band = self._build_runtime_fallback_band_label(price, float(price_low), float(price_high), prefix="PRICE")
+        return f"{fallback_prefix}{base_bucket}_{area_band}_{price_band}"
 
     def _match_property_bucket(self, prop: Dict[str, Any], bucket: Dict[str, Any]) -> bool:
         zone = str(prop.get("zone", "") or "").upper()
@@ -679,6 +1108,9 @@ class AgentService:
             return []
 
         mode = str(experiment_mode or "abundant").strip() or "abundant"
+        canonical_policy = profile_pack.get("canonical_bucket_policy", {}) or {}
+        fallback_prefix = str(canonical_policy.get("fallback_bucket_prefix", "FALLBACK_SUPPLY_") or "FALLBACK_SUPPLY_")
+        strict_required = bool(canonical_policy.get("strict_match_required_for_canonical", False))
         owned_props = [
             p for p in market_properties
             if int(p.get("owner_id", -1) or -1) > 0
@@ -773,7 +1205,7 @@ class AgentService:
                 assigned_property_ids.add(pid)
                 if len(selected_props) >= target_count:
                     break
-            if match_mode != "strict":
+            if match_mode != "strict" and not strict_required:
                 for prop in selected_props:
                     _coerce_property_to_bucket(prop, raw_bucket)
 
@@ -808,7 +1240,8 @@ class AgentService:
                     pid = int(prop.get("property_id", 0) or 0)
                     if pid <= 0 or pid in assigned_property_ids:
                         continue
-                    _coerce_property_to_bucket(prop, raw_bucket)
+                    if not strict_required:
+                        _coerce_property_to_bucket(prop, raw_bucket)
                     selected_props.append(prop)
                     assigned_property_ids.add(pid)
                     hard_filled += 1
@@ -832,21 +1265,32 @@ class AgentService:
                 prop["status"] = "for_sale"
                 prop["listing_month"] = 0
                 row_match_mode = match_mode if idx <= (actual_count - hard_filled) else "hard_fill_generated"
+                is_canonical = not strict_required or row_match_mode == "strict"
+                runtime_bucket_id = bid if is_canonical else self._build_runtime_fallback_bucket_id(
+                    prop=prop,
+                    fallback_prefix=fallback_prefix,
+                    canonical_target_bucket_id=bid,
+                    property_bucket_defs=property_bucket_defs,
+                )
                 prop_bucket_rows.append(
                     (
                         pid,
-                        bid,
+                        runtime_bucket_id,
                         mode,
                         "profiled_market_mode",
                         json.dumps(
                             {
                                 "bucket_id": bid,
+                                "runtime_bucket_id": runtime_bucket_id,
                                 "selected_for_sale": True,
                                 "target_count": int(target_count),
                                 "actual_count": int(actual_count),
                                 "match_rank": int(idx),
                                 "match_mode": row_match_mode,
                                 "hard_filled": bool(row_match_mode == "hard_fill_generated"),
+                                "bucket_class": "canonical" if is_canonical else "fallback",
+                                "canonical_target_bucket_id": bid,
+                                "fallback_base_bucket_id": bid if not is_canonical else "",
                             },
                             ensure_ascii=False,
                         ),
@@ -938,6 +1382,24 @@ class AgentService:
         )
         self.conn.commit()
 
+    def _replace_profiled_property_assignments(
+        self,
+        cursor: sqlite3.Cursor,
+        rows: List[Tuple[int, str, str, str, str]],
+    ) -> None:
+        self._ensure_profiled_market_tables(cursor)
+        cursor.execute("DELETE FROM profiled_market_property_buckets")
+        if rows:
+            cursor.executemany(
+                """
+                INSERT INTO profiled_market_property_buckets (
+                    property_id, bucket_id, supply_mode, source, metadata_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        self.conn.commit()
+
     def _load_profiled_agent_bucket_map(self, cursor: sqlite3.Cursor) -> Dict[int, str]:
         try:
             cursor.execute(
@@ -953,6 +1415,471 @@ class AgentService:
             except Exception:
                 continue
         return mapping
+
+    def _build_runtime_profiled_property_assignments(
+        self,
+        market_properties: List[Dict[str, Any]],
+        profile_pack: Dict[str, Any],
+        experiment_mode: str,
+    ) -> List[Tuple[int, str, str, str, str]]:
+        property_bucket_defs = profile_pack.get("property_profile_buckets", {}) or {}
+        if not isinstance(property_bucket_defs, dict) or not property_bucket_defs:
+            return []
+        canonical_policy = profile_pack.get("canonical_bucket_policy", {}) or {}
+        fallback_prefix = str(canonical_policy.get("fallback_bucket_prefix", "FALLBACK_SUPPLY_") or "FALLBACK_SUPPLY_")
+        rows: List[Tuple[int, str, str, str, str]] = []
+        for prop in sorted(
+            market_properties,
+            key=lambda item: int(item.get("property_id", 0) or 0),
+        ):
+            pid = int(prop.get("property_id", 0) or 0)
+            owner_id = int(prop.get("owner_id", -1) or -1)
+            if pid <= 0 or owner_id <= 0:
+                continue
+            matched_bucket_id = ""
+            for bucket_id, raw_bucket in property_bucket_defs.items():
+                if not isinstance(raw_bucket, dict):
+                    continue
+                bid = str(bucket_id or "").strip()
+                if not bid:
+                    continue
+                if self._match_property_bucket(prop, raw_bucket):
+                    matched_bucket_id = bid
+                    break
+            if not matched_bucket_id:
+                zone = str(prop.get("zone", "") or "").strip().upper() or "UNK"
+                school = "SCHOOL" if bool(prop.get("is_school_district", False)) else "NOSCHOOL"
+                type_bucket = self._normalize_property_type_bucket(prop.get("property_type"))
+                canonical_target_bucket_id = self._infer_fallback_canonical_target_bucket_id(
+                    prop,
+                    property_bucket_defs=property_bucket_defs,
+                )
+                matched_bucket_id = self._build_runtime_fallback_bucket_id(
+                    prop=prop,
+                    fallback_prefix=fallback_prefix,
+                    canonical_target_bucket_id=canonical_target_bucket_id,
+                    property_bucket_defs=property_bucket_defs,
+                )
+                bucket_class = "fallback"
+            else:
+                bucket_class = "canonical"
+                canonical_target_bucket_id = matched_bucket_id
+            rows.append(
+                (
+                    pid,
+                    matched_bucket_id,
+                    str(experiment_mode or "abundant"),
+                    "profiled_market_mode_runtime_sync",
+                    json.dumps(
+                        {
+                            "bucket_id": matched_bucket_id,
+                            "runtime_bucket_id": matched_bucket_id,
+                            "canonical_target_bucket_id": canonical_target_bucket_id,
+                            "runtime_synced": True,
+                            "owner_id": owner_id,
+                            "status": str(prop.get("status", "") or ""),
+                            "bucket_class": bucket_class,
+                            "fallback_base_bucket_id": str(canonical_target_bucket_id or ""),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _build_runtime_parent_bucket_maps(profile_pack: Dict[str, Any]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, Dict[str, Any]]]:
+        parent_defs = profile_pack.get("runtime_parent_buckets", {}) or {}
+        if not isinstance(parent_defs, dict):
+            return {}, {}, {}
+        demand_child_to_parent: Dict[str, str] = {}
+        supply_child_to_parent: Dict[str, str] = {}
+        normalized_defs: Dict[str, Dict[str, Any]] = {}
+        for parent_bucket_id, raw_def in parent_defs.items():
+            if not isinstance(raw_def, dict):
+                continue
+            pid = str(parent_bucket_id or "").strip()
+            if not pid:
+                continue
+            demand_children = [str(x).strip() for x in (raw_def.get("child_demand_buckets", []) or []) if str(x).strip()]
+            supply_children = [str(x).strip() for x in (raw_def.get("child_supply_buckets", []) or []) if str(x).strip()]
+            normalized_defs[pid] = {
+                "child_demand_buckets": demand_children,
+                "child_supply_buckets": supply_children,
+            }
+            for child in demand_children:
+                demand_child_to_parent[child] = pid
+            for child in supply_children:
+                supply_child_to_parent[child] = pid
+        return demand_child_to_parent, supply_child_to_parent, normalized_defs
+
+    def _hybrid_target_budget_floor_pass(
+        self,
+        agent: Agent,
+        bucket_id: str,
+        profile_pack: Dict[str, Any],
+        min_cash_observer: float,
+    ) -> bool:
+        if getattr(agent, "owned_properties", []):
+            return True
+        cash_now = float(getattr(agent, "cash", 0.0) or 0.0)
+        income_now = float(getattr(agent, "monthly_income", 0.0) or 0.0)
+        bucket_defs = profile_pack.get("agent_profile_buckets", {}) or {}
+        bucket_def = bucket_defs.get(str(bucket_id or "").strip(), {}) if isinstance(bucket_defs, dict) else {}
+        budget_profile = bucket_def.get("budget_profile", {}) or {}
+        cash_range = budget_profile.get("cash_range")
+        income_range = budget_profile.get("income_range")
+        cash_low, _ = self._safe_int_range(cash_range, 0, 0)
+        income_low, _ = self._safe_int_range(income_range, 0, 0)
+        if cash_low > 0 or income_low > 0:
+            return cash_now >= float(cash_low) and income_now >= float(income_low)
+        return cash_now >= float(min_cash_observer)
+
+    def _load_profiled_agent_bucket_details(self, cursor: sqlite3.Cursor) -> Dict[int, Dict[str, Any]]:
+        try:
+            cursor.execute(
+                """
+                SELECT agent_id, bucket_id, role_side, metadata_json
+                FROM profiled_market_agent_buckets
+                """
+            )
+        except Exception:
+            return {}
+        rows = cursor.fetchall() or []
+        mapping: Dict[int, Dict[str, Any]] = {}
+        for row in rows:
+            try:
+                agent_id = int(row[0])
+            except Exception:
+                continue
+            mapping[agent_id] = {
+                "bucket_id": str(row[1] or ""),
+                "role_side": str(row[2] or ""),
+                "metadata": json.loads(row[3]) if row[3] else {},
+            }
+        return mapping
+
+    def _load_live_profiled_property_bucket_supply(self, cursor: sqlite3.Cursor) -> Dict[str, int]:
+        try:
+            cursor.execute(
+                """
+                SELECT ppb.bucket_id, COUNT(*)
+                FROM properties_market pm
+                JOIN profiled_market_property_buckets ppb
+                  ON ppb.property_id = pm.property_id
+                WHERE LOWER(COALESCE(pm.status, ''))='for_sale'
+                GROUP BY ppb.bucket_id
+                """
+            )
+        except Exception:
+            return {}
+        rows = cursor.fetchall() or []
+        supply_map: Dict[str, int] = {}
+        for row in rows:
+            try:
+                supply_map[str(row[0] or "")] = int(row[1] or 0)
+            except Exception:
+                continue
+        return supply_map
+
+    @staticmethod
+    def _bucket_supply_pressure(ratio: float, eligible_supply_count: int) -> str:
+        if int(eligible_supply_count or 0) <= 0:
+            return "none"
+        if float(ratio or 0.0) > 2.0:
+            return "tight"
+        if float(ratio or 0.0) < 0.5:
+            return "loose"
+        return "balanced"
+
+    def _build_profiled_bucket_pressure_map(
+        self,
+        cursor: sqlite3.Cursor,
+        profile_pack: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        if not isinstance(profile_pack, dict) or not profile_pack:
+            return {}
+        bucket_defs = profile_pack.get("agent_profile_buckets", {}) or {}
+        if not isinstance(bucket_defs, dict):
+            bucket_defs = {}
+        rule_rows = profile_pack.get("bucket_alignment_rules", []) or []
+        rule_map = {
+            str(item.get("agent_bucket_id", "")).strip(): item
+            for item in rule_rows
+            if isinstance(item, dict) and str(item.get("agent_bucket_id", "")).strip()
+        }
+        assignment_details = self._load_profiled_agent_bucket_details(cursor)
+        assignment_counts: Dict[str, int] = {}
+        for item in assignment_details.values():
+            bucket_id = str(item.get("bucket_id", "") or "").strip()
+            if not bucket_id:
+                continue
+            assignment_counts[bucket_id] = int(assignment_counts.get(bucket_id, 0) or 0) + 1
+        live_supply_by_bucket = self._load_live_profiled_property_bucket_supply(cursor)
+
+        pressure_map: Dict[str, Dict[str, Any]] = {}
+        for bucket_id, bucket_def in bucket_defs.items():
+            bid = str(bucket_id or "").strip()
+            if not bid or not isinstance(bucket_def, dict):
+                continue
+            rule = rule_map.get(bid, {}) or {}
+            eligible_property_buckets = [
+                str(x) for x in (rule.get("eligible_property_buckets", []) or []) if str(x).strip()
+            ]
+            eligible_supply_count = int(
+                sum(int(live_supply_by_bucket.get(prop_bucket, 0) or 0) for prop_bucket in eligible_property_buckets)
+            )
+            assigned_count = int(assignment_counts.get(bid, int(bucket_def.get("count", 0) or 0)) or 0)
+            buyer_to_supply_ratio = float(assigned_count) / float(max(1, eligible_supply_count))
+            pressure_map[bid] = {
+                "bucket_id": bid,
+                "role_side": str(bucket_def.get("role_side", "") or ""),
+                "eligible_property_buckets": eligible_property_buckets,
+                "eligible_property_bucket_count_this_month": int(eligible_supply_count),
+                "buyer_to_supply_ratio": round(float(buyer_to_supply_ratio), 4),
+                "bucket_supply_pressure": self._bucket_supply_pressure(
+                    ratio=buyer_to_supply_ratio,
+                    eligible_supply_count=eligible_supply_count,
+                ),
+                "assigned_count": assigned_count,
+            }
+        return pressure_map
+
+    def _build_runtime_parent_bucket_pressure_map(
+        self,
+        cursor: sqlite3.Cursor,
+        profile_pack: Dict[str, Any],
+        child_pressure_map: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        _, _, parent_defs = self._build_runtime_parent_bucket_maps(profile_pack)
+        if not parent_defs:
+            return {}
+        live_supply_by_bucket = self._load_live_profiled_property_bucket_supply(cursor)
+        parent_map: Dict[str, Dict[str, Any]] = {}
+        for parent_bucket_id, parent_def in parent_defs.items():
+            demand_children = [str(x).strip() for x in (parent_def.get("child_demand_buckets", []) or []) if str(x).strip()]
+            child_rows = [child_pressure_map.get(child_id, {}) for child_id in demand_children if child_pressure_map.get(child_id)]
+            if not child_rows:
+                continue
+            eligible_buckets: List[str] = []
+            assigned_count = 0
+            role_sides = set()
+            for row in child_rows:
+                role_side = str(row.get("role_side", "") or "").strip()
+                if role_side:
+                    role_sides.add(role_side)
+                assigned_count += int(row.get("assigned_count", 0) or 0)
+                for prop_bucket in (row.get("eligible_property_buckets", []) or []):
+                    pbid = str(prop_bucket or "").strip()
+                    if pbid and pbid not in eligible_buckets:
+                        eligible_buckets.append(pbid)
+            eligible_supply_count = int(sum(int(live_supply_by_bucket.get(pbid, 0) or 0) for pbid in eligible_buckets))
+            buyer_to_supply_ratio = float(assigned_count) / float(max(1, eligible_supply_count))
+            if "buyer" in {s.lower() for s in role_sides}:
+                role_side = "buyer"
+            elif "buyer_seller" in {s.lower() for s in role_sides}:
+                role_side = "buyer_seller"
+            else:
+                role_side = next(iter(role_sides), "")
+            parent_map[parent_bucket_id] = {
+                "bucket_id": parent_bucket_id,
+                "role_side": role_side,
+                "eligible_property_buckets": eligible_buckets,
+                "eligible_property_bucket_count_this_month": eligible_supply_count,
+                "buyer_to_supply_ratio": round(float(buyer_to_supply_ratio), 4),
+                "bucket_supply_pressure": self._bucket_supply_pressure(
+                    ratio=buyer_to_supply_ratio,
+                    eligible_supply_count=eligible_supply_count,
+                ),
+                "assigned_count": int(assigned_count),
+                "child_bucket_ids": demand_children,
+            }
+        return parent_map
+
+    def _build_activation_persona_packet(
+        self,
+        agent: Agent,
+        profile_pack: Dict[str, Any],
+        bucket_pressure_map: Dict[str, Dict[str, Any]],
+        parent_pressure_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        bucket_id = str(getattr(agent, "profile_bucket_id", "") or "").strip()
+        if not bucket_id:
+            return {}
+        demand_child_to_parent, _, _ = self._build_runtime_parent_bucket_maps(profile_pack)
+        parent_bucket_id = str(demand_child_to_parent.get(bucket_id, "") or "").strip()
+        bucket_defs = profile_pack.get("agent_profile_buckets", {}) or {}
+        bucket_def = bucket_defs.get(bucket_id, {}) if isinstance(bucket_defs, dict) else {}
+        pref_profile = bucket_def.get("preference_profile", {}) or {}
+        budget_profile = bucket_def.get("budget_profile", {}) or {}
+        pressure = bucket_pressure_map.get(bucket_id, {})
+        runtime_pressure = (parent_pressure_map or {}).get(parent_bucket_id, pressure) if parent_bucket_id else pressure
+        target_buy_range = budget_profile.get("target_buy_price_range")
+        max_price_range = budget_profile.get("max_price_range")
+        budget_range = target_buy_range if isinstance(target_buy_range, (list, tuple)) and len(target_buy_range) >= 2 else max_price_range
+        if isinstance(budget_range, (list, tuple)) and len(budget_range) >= 2:
+            budget_band = f"{int(budget_range[0])}-{int(budget_range[1])}"
+        else:
+            max_price = float(getattr(getattr(agent, "preference", None), "max_price", 0.0) or 0.0)
+            budget_band = f"0-{int(max_price)}" if max_price > 0 else "0-0"
+        packet = {
+            "profile_bucket_id": bucket_id,
+            "runtime_parent_bucket_id": parent_bucket_id,
+            "role_side_hint": str(runtime_pressure.get("role_side", bucket_def.get("role_side", "")) or ""),
+            "target_zone": str(pref_profile.get("target_zone", getattr(agent.preference, "target_zone", "")) or ""),
+            "need_school_district": bool(
+                pref_profile.get("need_school_district", getattr(agent.preference, "need_school_district", False))
+            ),
+            "property_type_target": str(pref_profile.get("property_type_target", "") or ""),
+            "budget_band": str(budget_band),
+            "eligible_property_bucket_count_this_month": int(
+                runtime_pressure.get("eligible_property_bucket_count_this_month", 0) or 0
+            ),
+            "bucket_supply_pressure": str(runtime_pressure.get("bucket_supply_pressure", "unknown") or "unknown"),
+            "buyer_to_supply_ratio": float(runtime_pressure.get("buyer_to_supply_ratio", 0.0) or 0.0),
+            "eligible_property_buckets_runtime": list(runtime_pressure.get("eligible_property_buckets", []) or []),
+            "info_delay_months": int(getattr(agent, "info_delay_months", 0) or 0),
+        }
+        agent_profile = bucket_def.get("agent_profile", {}) or {}
+        if isinstance(agent_profile, dict):
+            for field in (
+                "life_stage",
+                "household_structure",
+                "housing_stage",
+                "education_strategy",
+                "asset_state",
+                "care_burden",
+                "location_logic",
+                "risk_style",
+            ):
+                if agent_profile.get(field) not in (None, ""):
+                    packet[field] = str(agent_profile.get(field))
+        return packet
+
+    def _attach_activation_persona_packets(
+        self,
+        cursor: sqlite3.Cursor,
+        profile_pack: Dict[str, Any],
+    ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        bucket_pressure_map = self._build_profiled_bucket_pressure_map(cursor, profile_pack)
+        parent_pressure_map = self._build_runtime_parent_bucket_pressure_map(cursor, profile_pack, bucket_pressure_map)
+        for agent in self.agents:
+            packet = self._build_activation_persona_packet(
+                agent,
+                profile_pack,
+                bucket_pressure_map,
+                parent_pressure_map=parent_pressure_map,
+            )
+            setattr(agent, "_activation_persona_packet", packet)
+        return bucket_pressure_map, parent_pressure_map
+
+    def _select_hybrid_targeted_candidates(
+        self,
+        cursor: sqlite3.Cursor,
+        *,
+        existing_candidates: List[Agent],
+        profile_pack: Dict[str, Any],
+        min_cash_observer: float,
+        targeted_score_threshold: float,
+        severe_bucket_deficit_ratio: float,
+        max_targeted_total: int,
+    ) -> Tuple[List[Agent], Dict[int, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+        if not isinstance(profile_pack, dict) or not profile_pack:
+            return [], {}, {}
+        bucket_pressure_map, parent_pressure_map = self._attach_activation_persona_packets(cursor, profile_pack)
+        demand_child_to_parent, _, _ = self._build_runtime_parent_bucket_maps(profile_pack)
+        effective_pressure_map = parent_pressure_map if parent_pressure_map else bucket_pressure_map
+        if not effective_pressure_map:
+            return [], {}, {}
+
+        candidate_id_set = {int(getattr(a, "id", -1)) for a in existing_candidates}
+        severe_ratio = max(1.0, float(severe_bucket_deficit_ratio or 5.0))
+        target_bucket_ids = {
+            bucket_id
+            for bucket_id, meta in effective_pressure_map.items()
+            if str(meta.get("role_side", "") or "").lower() in {"buyer", "mixed"}
+            and int(meta.get("eligible_property_bucket_count_this_month", 0) or 0) > 0
+            and float(meta.get("buyer_to_supply_ratio", 0.0) or 0.0) <= severe_ratio
+        }
+        if not target_bucket_ids:
+            return [], {}, bucket_pressure_map
+
+        per_bucket_ranked: Dict[str, List[Tuple[float, float, Agent]]] = {}
+        threshold = max(0.005, float(targeted_score_threshold or 0.0))
+        for agent in self.agents:
+            try:
+                agent_id = int(getattr(agent, "id", -1))
+            except Exception:
+                agent_id = -1
+            if agent_id <= 0 or agent_id in candidate_id_set:
+                continue
+            if hasattr(agent, "role") and getattr(agent, "role", "OBSERVER") in ["BUYER", "SELLER", "BUYER_SELLER"]:
+                continue
+            child_bucket_id = str(getattr(agent, "profile_bucket_id", "") or "").strip()
+            target_bucket_id = str(demand_child_to_parent.get(child_bucket_id, child_bucket_id) or "").strip()
+            if target_bucket_id not in target_bucket_ids:
+                continue
+            if not self._hybrid_target_budget_floor_pass(
+                agent=agent,
+                bucket_id=child_bucket_id,
+                profile_pack=profile_pack,
+                min_cash_observer=min_cash_observer,
+            ):
+                continue
+            score = max(0.0, min(1.0, float(calculate_activation_probability(agent))))
+            if score < threshold:
+                continue
+            priority = float(self._buyer_affordability_proxy(agent))
+            per_bucket_ranked.setdefault(target_bucket_id, []).append((score, priority, agent))
+
+        if not per_bucket_ranked:
+            return [], {}, bucket_pressure_map
+
+        for bucket_id in per_bucket_ranked:
+            per_bucket_ranked[bucket_id].sort(
+                key=lambda item: (float(item[0]), float(item[1]), -int(item[2].id)),
+                reverse=True,
+            )
+
+        bucket_count = max(1, len(per_bucket_ranked))
+        using_parent_grouping = bool(parent_pressure_map) and bool(demand_child_to_parent)
+        per_bucket_cap = 1
+        if (not using_parent_grouping) and int(max_targeted_total or 0) > 0:
+            per_bucket_cap = max(1, int(max_targeted_total) // bucket_count)
+            if int(max_targeted_total) < bucket_count:
+                per_bucket_cap = 1
+
+        targeted_agents: List[Agent] = []
+        targeted_map: Dict[int, Dict[str, Any]] = {}
+        total_cap = max(int(max_targeted_total or 0), bucket_count)
+        for bucket_id in sorted(per_bucket_ranked.keys()):
+            selected = 0
+            meta = effective_pressure_map.get(bucket_id, {})
+            for score, _, agent in per_bucket_ranked[bucket_id]:
+                if len(targeted_agents) >= total_cap:
+                    break
+                if selected >= per_bucket_cap:
+                    break
+                agent_id = int(agent.id)
+                tag = {
+                    "bucket_id": bucket_id,
+                    "parent_bucket_id": bucket_id,
+                    "child_bucket_id": str(getattr(agent, "profile_bucket_id", "") or ""),
+                    "reason": "hybrid_bucket_targeted_llm",
+                    "activation_score": round(float(score), 4),
+                    "eligible_property_bucket_count_this_month": int(
+                        meta.get("eligible_property_bucket_count_this_month", 0) or 0
+                    ),
+                    "bucket_supply_pressure": str(meta.get("bucket_supply_pressure", "unknown") or "unknown"),
+                    "buyer_to_supply_ratio": float(meta.get("buyer_to_supply_ratio", 0.0) or 0.0),
+                }
+                setattr(agent, "_hybrid_bucket_targeted_meta", dict(tag))
+                targeted_agents.append(agent)
+                targeted_map[agent_id] = dict(tag)
+                selected += 1
+            if len(targeted_agents) >= total_cap:
+                break
+        return targeted_agents, targeted_map, bucket_pressure_map
 
     @staticmethod
     def _safe_property_count(agent: Agent) -> int:
@@ -1214,6 +2141,14 @@ class AgentService:
         info_delay = int(getattr(agent, "info_delay_months", 0) or 0)
         monthly_event = str(getattr(agent, "monthly_event", "") or "")
         agent_type = str(getattr(agent, "agent_type", "normal") or "normal").lower()
+        lifecycle_key = "|".join(
+            build_activation_lifecycle_packet(
+                agent,
+                month=0,
+                min_cash_observer=self._get_min_cash_observer_threshold(),
+                holding_lock_months=self._min_holding_months_before_resale(),
+            ).get("labels", [])[:6]
+        )
         bulletin_head = ""
         if recent_bulletins:
             # Keep only first 2 bulletins to avoid high-churn signature noise.
@@ -1234,6 +2169,7 @@ class AgentService:
             "family_stage": str(getattr(agent.story, "family_stage", "") or "")[:32],
             "education_path": str(getattr(agent.story, "education_path", "") or "")[:32],
             "financial_profile": str(getattr(agent.story, "financial_profile", "") or "")[:32],
+            "lifecycle_key": lifecycle_key,
             "bulletin_hash": hashlib.sha1(bulletin_head.encode("utf-8", errors="ignore")).hexdigest()[:12],
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
@@ -1580,9 +2516,32 @@ class AgentService:
             if zone in props_by_zone:
                 props_by_zone[zone].append(prop)
 
+        def _preserve_no_home_bucket(agent: Agent) -> bool:
+            init_constraints = getattr(agent, "profile_initialization_constraints", {}) or {}
+            if bool(init_constraints.get("preserve_no_home", False)):
+                return True
+            story = getattr(agent, "story", None)
+            housing_stage = str(getattr(story, "housing_stage", "") or "").strip().lower()
+            purchase_motive = str(getattr(story, "purchase_motive_primary", "") or "").strip().lower()
+            no_home_stages = {
+                "starter_no_home",
+                "no_home_first_purchase",
+                "starter_entry",
+            }
+            no_home_motives = {
+                "starter_home",
+                "starter_no_home",
+                "rent_to_buy",
+                "new_family_first_home",
+            }
+            return housing_stage in no_home_stages or purchase_motive in no_home_motives
+
         # Keep assignment fair: preferentially assign to agents with fewer holdings.
         def _pick_agent_for_new_property() -> Agent:
-            return min(self.agents, key=lambda a: len(getattr(a, "owned_properties", []) or []))
+            eligible_agents = [a for a in self.agents if not _preserve_no_home_bucket(a)]
+            if not eligible_agents:
+                eligible_agents = list(self.agents)
+            return min(eligible_agents, key=lambda a: len(getattr(a, "owned_properties", []) or []))
 
         # Ensure each zone has enough owned properties.
         owner_added_by_zone: Dict[str, int] = {z: 0 for z in zone_keys}
@@ -1932,6 +2891,15 @@ class AgentService:
                     prop_count_range = default_prop_ownership[tier]["property_count"]
                     target_props = random.randint(*prop_count_range)
 
+                profile_bucket_id = None
+                if current_id - 1 < len(profiled_assignments):
+                    profile_bucket_id = profiled_assignments[current_id - 1]
+                target_props = self._resolve_profiled_initial_property_target(
+                    default_target_props=target_props,
+                    bucket_id=profile_bucket_id,
+                    bucket_defs=profiled_bucket_defs,
+                )
+
                 # is_prop_allocated = False
                 for _ in range(target_props):
                     if prop_idx < len(market_properties):
@@ -1951,9 +2919,6 @@ class AgentService:
                         prop_idx += 1
                         # is_prop_allocated = True
 
-                profile_bucket_id = None
-                if current_id - 1 < len(profiled_assignments):
-                    profile_bucket_id = profiled_assignments[current_id - 1]
                 profile_meta = self._apply_profiled_agent_bucket(
                     agent=agent,
                     bucket_id=profile_bucket_id,
@@ -2085,6 +3050,14 @@ class AgentService:
         # Initial Listings Logic could be here or returned to caller.
         # Let's handle it here to keep initialization self-contained.
         self._create_initial_listings(cursor)
+        if bool(profiled_mode_cfg.get("enabled", False)) and profiled_pack:
+            profiled_property_rows = self._build_runtime_profiled_property_assignments(
+                market_properties=market_properties,
+                profile_pack=profiled_pack,
+                experiment_mode=str(profiled_mode_cfg.get("experiment_mode", "abundant") or "abundant"),
+            )
+            self._replace_profiled_property_assignments(cursor, profiled_property_rows)
+            profiled_supply_selected_total = int(len(profiled_property_rows))
         init_supply_snapshot = self._load_init_supply_db_snapshot(cursor, init_supply_targets)
         logger.info(
             "Init supply coverage snapshot: "
@@ -2270,6 +3243,10 @@ class AgentService:
                     a.monthly_event = a_data.get('llm_intent_summary')
                     a.activation_trigger = a_data.get('activation_trigger', '') or ''
                     a.school_urgency = int(a_data.get('school_urgency') or 0)
+                    a.timing_role = a_data.get('timing_role', '') or ''
+                    a.decision_urgency = a_data.get('decision_urgency', '') or ''
+                    a.lifecycle_summary = a_data.get('lifecycle_summary', '') or ''
+                    a.lifecycle_labels = self._loads_lifecycle_labels(a_data.get('lifecycle_labels'))
 
                     # Restore preference data for buyer-side states so resume can inherit
                     # last-month search context instead of starting from a blank observer shell.
@@ -2345,6 +3322,8 @@ class AgentService:
     def process_life_events(self, month: int, batch_decision_logs: List):
         """Handle stochastic life events."""
         cursor = self.conn.cursor()
+        for agent in self.agents:
+            agent.current_life_event = None
         if self.config.life_events:
             life_event_sample_size = int(len(self.agents) * 0.05)
             life_event_candidates = random.sample(self.agents, min(life_event_sample_size, len(self.agents)))
@@ -2353,6 +3332,9 @@ class AgentService:
                 event_result = select_monthly_event(agent, month, self.config)
                 if event_result and event_result.get("event"):
                     apply_event_effects(agent, event_result, self.config)
+                    agent.current_life_event = str(event_result.get("event") or "")
+                    if agent.current_life_event:
+                        agent.set_life_event(month, agent.current_life_event)
                     agent.total_assets = float(agent.net_worth)
 
                     batch_decision_logs.append((
@@ -2796,6 +3778,12 @@ class AgentService:
         if forced_mode in ("sell_first", "buy_first"):
             return forced_mode
 
+        timing_role = str(decision_payload.get("timing_role", "") or "").lower().strip()
+        if timing_role == TIMING_ROLE_SELL_THEN_BUY:
+            return "sell_first"
+        if timing_role == TIMING_ROLE_BUY_NOW and len(agent.owned_properties) > 0:
+            return "buy_first"
+
         mode = str(decision_payload.get("chain_mode", "")).lower().strip()
         if mode in ("sell_first", "buy_first"):
             return mode
@@ -2803,6 +3791,291 @@ class AgentService:
         if len(agent.owned_properties) > 0 and agent.cash < max(300000, agent.monthly_income * 12):
             return "sell_first"
         return "buy_first"
+
+    @staticmethod
+    def _loads_lifecycle_labels(raw_value) -> List[str]:
+        if isinstance(raw_value, list):
+            return [str(item) for item in raw_value if str(item)]
+        text = str(raw_value or "").strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return [segment.strip() for segment in text.split("|") if segment.strip()]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if str(item)]
+        return []
+
+    def _resolve_timing_role(
+        self,
+        *,
+        agent: Agent,
+        role_str: str,
+        decision_payload: Dict,
+        lifecycle_packet: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        raw = str((decision_payload or {}).get("timing_role", "") or "").strip().lower()
+        if raw in VALID_TIMING_ROLES:
+            return raw
+        chain_mode = str((decision_payload or {}).get("chain_mode", "") or "").strip().lower()
+        if role_str == "BUYER_SELLER":
+            if chain_mode == "sell_first":
+                return TIMING_ROLE_SELL_THEN_BUY
+            return TIMING_ROLE_BUY_NOW
+        if role_str == "BUYER":
+            return TIMING_ROLE_BUY_NOW
+        if role_str == "SELLER":
+            return TIMING_ROLE_SELL_NOW
+        labels = set((lifecycle_packet or {}).get("labels", []) or self._loads_lifecycle_labels((decision_payload or {}).get("lifecycle_labels")))
+        demand_labels = {
+            "LIFE_SHOCK",
+            "SPACE_SQUEEZE",
+            "DEADLINE_PRESSURE",
+            "LIQUIDITY_READY",
+            "CHAIN_BLOCKED",
+            "CHAIN_UNLOCKED",
+        }
+        return TIMING_ROLE_NEED_WAIT if labels & demand_labels else TIMING_ROLE_OBSERVE_WAIT
+
+    @staticmethod
+    def _resolve_decision_urgency(decision_payload: Dict) -> str:
+        raw = str((decision_payload or {}).get("urgency_level", "") or "").strip().lower()
+        if raw in VALID_URGENCY_LEVELS:
+            return raw
+        return derive_decision_urgency(str((decision_payload or {}).get("life_pressure", "patient") or "patient"))
+
+    def _seller_rewake_cooldown_rounds(self) -> int:
+        return max(0, int(self.config.get("smart_agent.seller_rewake_cooldown_rounds", 2) or 2))
+
+    def _seller_signal_lookback_rounds(self) -> int:
+        return max(1, int(self.config.get("smart_agent.seller_signal_lookback_rounds", 2) or 2))
+
+    @staticmethod
+    def _derive_supply_bucket_id(prop: Dict[str, Any]) -> str:
+        zone_bucket = str(prop.get("zone", "") or "UNK").upper()
+        school_bucket = "SCHOOL" if bool(prop.get("is_school_district", False)) else "NOSCHOOL"
+        property_type = str(prop.get("property_type", "") or "").lower()
+        area = float(prop.get("building_area", 0.0) or 0.0)
+        if any(token in property_type for token in ("villa", "improve", "改善", "大平层")):
+            type_bucket = "IMPROVE"
+        elif any(token in property_type for token in ("small", "刚需", "compact", "studio")):
+            type_bucket = "JUST"
+        else:
+            type_bucket = "IMPROVE" if area >= 110.0 else "JUST"
+        return f"{zone_bucket}_{school_bucket}_{type_bucket}"
+
+    @staticmethod
+    def _bucket_display_label(bucket_id: str) -> str:
+        parts = [segment.strip().upper() for segment in str(bucket_id or "").split("_") if segment.strip()]
+        if len(parts) >= 3 and parts[0] in {"A", "B"}:
+            zone = f"{parts[0]}区"
+            school = "学区" if parts[1] == "SCHOOL" else "非学区"
+            demand = "刚需" if parts[2] == "JUST" else "改善"
+            return f"{zone}/{school}/{demand}"
+        return str(bucket_id or "未识别画像")
+
+    def _build_seller_market_signal_packet(
+        self,
+        cursor: sqlite3.Cursor,
+        agent: Agent,
+        month: int,
+        *,
+        holding_lock_months: int,
+    ) -> Dict[str, Any]:
+        owned_properties = list(getattr(agent, "owned_properties", []) or [])
+        if not owned_properties:
+            return {}
+
+        property_ids = [
+            int(prop.get("property_id", -1) or -1)
+            for prop in owned_properties
+            if int(prop.get("property_id", -1) or -1) > 0
+        ]
+        state_map: Dict[int, Dict[str, Any]] = {}
+        if property_ids:
+            placeholders = ",".join("?" for _ in property_ids)
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT pm.property_id, pm.status, pm.current_valuation, pm.listed_price, pm.acquired_month,
+                           ps.zone, ps.is_school_district, ps.property_type, ps.building_area
+                    FROM properties_market pm
+                    LEFT JOIN properties_static ps ON ps.property_id = pm.property_id
+                    WHERE pm.property_id IN ({placeholders})
+                    """,
+                    tuple(property_ids),
+                )
+                for row in cursor.fetchall() or []:
+                    state_map[int(row[0])] = {
+                        "status": str(row[1] or ""),
+                        "current_valuation": float(row[2] or 0.0),
+                        "listed_price": float(row[3] or 0.0),
+                        "acquired_month": int(row[4] or 0) if row[4] is not None else 0,
+                        "zone": str(row[5] or ""),
+                        "is_school_district": bool(row[6]),
+                        "property_type": str(row[7] or ""),
+                        "building_area": float(row[8] or 0.0),
+                    }
+            except Exception:
+                state_map = {}
+
+        eligible_properties: List[Dict[str, Any]] = []
+        for prop in owned_properties:
+            property_id = int(prop.get("property_id", -1) or -1)
+            merged = dict(prop or {})
+            merged.update(state_map.get(property_id, {}))
+            status = str(merged.get("status", "off_market") or "off_market").lower()
+            acquired_month = int(merged.get("acquired_month", 0) or 0)
+            if acquired_month > 0 and (int(month) - acquired_month) < max(1, int(holding_lock_months or 12)):
+                continue
+            if status in {"for_sale", "pending_settlement", "sold"}:
+                continue
+            merged["property_id"] = property_id
+            merged["bucket_id"] = self._derive_supply_bucket_id(merged)
+            eligible_properties.append(merged)
+
+        last_sell_round = 0
+        try:
+            cursor.execute(
+                """
+                SELECT MAX(month)
+                FROM active_participants
+                WHERE agent_id = ?
+                  AND timing_role = 'sell_now'
+                """,
+                (int(agent.id),),
+            )
+            row = cursor.fetchone()
+            last_sell_round = int((row or [0])[0] or 0)
+        except Exception:
+            last_sell_round = 0
+
+        cooldown_rounds = self._seller_rewake_cooldown_rounds()
+        cooldown_active = bool(
+            cooldown_rounds > 0
+            and last_sell_round > 0
+            and (int(month) - int(last_sell_round)) <= int(cooldown_rounds)
+        )
+
+        packet: Dict[str, Any] = {
+            "eligible_property_ids": [int(item.get("property_id", -1) or -1) for item in eligible_properties],
+            "eligible_bucket_ids": sorted(
+                {
+                    str(item.get("bucket_id", "") or "").strip()
+                    for item in eligible_properties
+                    if str(item.get("bucket_id", "") or "").strip()
+                }
+            ),
+            "cooldown_rounds": int(cooldown_rounds),
+            "last_sell_round": int(last_sell_round),
+            "cooldown_active": bool(cooldown_active),
+        }
+        if cooldown_active:
+            packet["cooldown_detail"] = (
+                f"上次 sell_now 在第{int(last_sell_round)}回合，冷却要求 {int(cooldown_rounds)} 回合"
+            )
+            return packet
+        if not eligible_properties:
+            return packet
+
+        bucket_ids = packet["eligible_bucket_ids"]
+        lookback_start = max(1, int(month) - int(self._seller_signal_lookback_rounds()))
+        metrics_by_bucket: Dict[str, Dict[str, Any]] = {}
+        if bucket_ids:
+            placeholders = ",".join("?" for _ in bucket_ids)
+            try:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') AS bucket_id,
+                        SUM(CASE WHEN is_valid_bid = 1 THEN 1 ELSE 0 END) AS valid_bids,
+                        SUM(CASE WHEN proceeded_to_negotiation = 1 THEN 1 ELSE 0 END) AS negotiations,
+                        COUNT(DISTINCT CASE
+                            WHEN COALESCE(json_extract(match_context, '$.shortlist_item.heat_state.real_competition_score'), 0) > 0
+                            THEN property_id END
+                        ) AS real_comp_props,
+                        COUNT(DISTINCT CASE
+                            WHEN final_outcome IN ('FILLED', 'PENDING_SETTLEMENT')
+                            THEN property_id END
+                        ) AS filled_props,
+                        SUM(CASE WHEN failure_reason = 'NO_ACTIVE_LISTINGS' THEN 1 ELSE 0 END) AS no_active_rows,
+                        COUNT(DISTINCT CASE WHEN failure_reason = 'NO_ACTIVE_LISTINGS' THEN buyer_id END) AS waiting_buyers
+                    FROM property_buyer_matches
+                    WHERE month BETWEEN ? AND ?
+                      AND COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '') IN ({placeholders})
+                    GROUP BY COALESCE(json_extract(match_context, '$.shortlist_item.candidate_bucket_id'), '')
+                    """,
+                    (int(lookback_start), max(int(month) - 1, int(lookback_start)), *bucket_ids),
+                )
+                for row in cursor.fetchall() or []:
+                    bucket_id = str(row[0] or "").strip()
+                    if not bucket_id:
+                        continue
+                    metrics_by_bucket[bucket_id] = {
+                        "valid_bids": int(row[1] or 0),
+                        "negotiations": int(row[2] or 0),
+                        "real_comp_props": int(row[3] or 0),
+                        "filled_props": int(row[4] or 0),
+                        "no_active_rows": int(row[5] or 0),
+                        "waiting_buyers": int(row[6] or 0),
+                    }
+            except Exception:
+                metrics_by_bucket = {}
+
+        best_bucket_id = ""
+        best_bucket_metrics: Dict[str, Any] = {}
+        best_score = -1.0
+        for bucket_id in bucket_ids:
+            metrics = dict(metrics_by_bucket.get(bucket_id, {}) or {})
+            score = (
+                float(metrics.get("valid_bids", 0)) * 1.5
+                + float(metrics.get("negotiations", 0)) * 1.5
+                + float(metrics.get("real_comp_props", 0)) * 2.0
+                + float(metrics.get("filled_props", 0)) * 2.0
+                + float(metrics.get("no_active_rows", 0)) * 1.0
+            )
+            if score > best_score:
+                best_score = score
+                best_bucket_id = bucket_id
+                best_bucket_metrics = metrics
+
+        if best_bucket_id:
+            waiting_buyers = int(best_bucket_metrics.get("waiting_buyers", 0) or 0)
+            no_active_rows = int(best_bucket_metrics.get("no_active_rows", 0) or 0)
+            valid_bids = int(best_bucket_metrics.get("valid_bids", 0) or 0)
+            real_comp_props = int(best_bucket_metrics.get("real_comp_props", 0) or 0)
+            filled_props = int(best_bucket_metrics.get("filled_props", 0) or 0)
+            packet["best_bucket_id"] = best_bucket_id
+            packet["best_bucket_display"] = self._bucket_display_label(best_bucket_id)
+            packet["best_bucket_metrics"] = best_bucket_metrics
+            packet["local_price_push_window"] = bool(
+                valid_bids >= 2
+                or real_comp_props >= 1
+                or filled_props >= 1
+            )
+            packet["local_price_push_detail"] = (
+                f"{packet['best_bucket_display']} 最近存在真实承接: 有效出价{valid_bids}，"
+                f"真实竞争房源{real_comp_props}，成交房源{filled_props}"
+            )
+            packet["scarcity_match_window"] = bool(waiting_buyers >= 1 or no_active_rows >= 2)
+            packet["scarcity_detail"] = (
+                f"{packet['best_bucket_display']} 当前缺口明显: NO_ACTIVE_LISTINGS={no_active_rows}，等待买家={waiting_buyers}"
+            )
+
+        replacement_ready = bool(getattr(agent, "buy_completed", 0)) and bool(eligible_properties)
+        if replacement_ready:
+            release_bucket = packet.get("best_bucket_display") or self._bucket_display_label(
+                str(eligible_properties[0].get("bucket_id", "") or "")
+            )
+            packet["replacement_old_home_release"] = True
+            packet["replacement_release_detail"] = (
+                f"已完成买入后仍持有 {len(eligible_properties)} 套可售旧房，可评估释放 {release_bucket}"
+            )
+        else:
+            packet["replacement_old_home_release"] = False
+
+        return packet
 
     def _resolve_risk_mode(self, agent: Agent, decision_payload: Dict, pref=None) -> str:
         mode = str(decision_payload.get("risk_mode", "")).lower().strip()
@@ -2881,6 +4154,11 @@ class AgentService:
         cursor = self.conn.cursor()
         candidates = []
         self._last_forced_role_summary = None
+        profiled_mode_cfg = self._profiled_market_mode_cfg()
+        profiled_pack = self._resolve_profiled_market_pack(profiled_mode_cfg)
+        bucket_pressure_map: Dict[str, Dict[str, Any]] = {}
+        if profiled_pack:
+            bucket_pressure_map = self._attach_activation_persona_packets(cursor, profiled_pack)
 
         if self.is_v2:
             # 🆕 Stage 1: Pre-filter using Rule Engine (0 Token Cost)
@@ -2933,14 +4211,22 @@ class AgentService:
         # - signature cache reuse (TTL)
         synthetic_decisions = []
         llm_candidate_entries: List[Dict] = []
+        hybrid_targeted_map: Dict[int, Dict[str, Any]] = {}
         optimization_counters = {
             "routed_low_score_observer": 0,
             "observer_frozen": 0,
             "signature_cache_hit": 0,
             "budget_downgraded_observer": 0,
+            "hybrid_bucket_targeted": 0,
         }
 
+        activation_governance_cfg = self._activation_governance_cfg(month=int(month))
         forced_role_cfg = self._forced_role_mode_cfg(month=int(month))
+        if str(activation_governance_cfg.get("activation_mode", "natural") or "natural") != "forced":
+            forced_role_cfg = {
+                **dict(forced_role_cfg),
+                "enabled": False,
+            }
         if bool(forced_role_cfg.get("enabled", False)):
             synthetic_decisions, _ = self._build_forced_role_decisions(
                 candidates=candidates,
@@ -2955,12 +4241,86 @@ class AgentService:
             )
             candidates = []
 
+        if (
+            str(activation_governance_cfg.get("activation_mode", "natural") or "natural") == "hybrid"
+            and profiled_pack
+        ):
+            targeted_agents, hybrid_targeted_map, bucket_pressure_map = self._select_hybrid_targeted_candidates(
+                cursor,
+                existing_candidates=candidates,
+                profile_pack=profiled_pack,
+                min_cash_observer=min_cash_observer,
+                targeted_score_threshold=max(0.005, float(low_cut) * 0.5 if router_enabled else 0.01),
+                severe_bucket_deficit_ratio=float(
+                    activation_governance_cfg.get("severe_bucket_deficit_ratio", 5.0) or 5.0
+                ),
+                max_targeted_total=int(
+                    activation_governance_cfg.get("autofill_demand_floor", 0) or 0
+                ),
+            )
+            if targeted_agents:
+                existing_ids = {int(getattr(a, "id", -1)) for a in candidates}
+                for agent in targeted_agents:
+                    if int(getattr(agent, "id", -1)) in existing_ids:
+                        continue
+                    candidates.append(agent)
+                    existing_ids.add(int(getattr(agent, "id", -1)))
+                optimization_counters["hybrid_bucket_targeted"] += int(len(targeted_agents))
+                logger.info(
+                    "HybridActivation month=%s targeted_candidates=%s buckets=%s",
+                    int(month),
+                    int(len(targeted_agents)),
+                    sorted({str(item.get("bucket_id", "")) for item in hybrid_targeted_map.values() if item}),
+                )
+
+        holding_lock_months = self._min_holding_months_before_resale()
         for agent in candidates:
             score = max(0.0, min(1.0, float(calculate_activation_probability(agent))))
             signature = self._build_role_signature(agent, market_trend=market_trend, recent_bulletins=recent_bulletins)
             force_buy_lock = bool(getattr(agent, "_buy_task_locked", False)) and (not bool(getattr(agent, "_search_exhausted", False))) and (not bool(getattr(agent, "buy_completed", 0)))
+            targeted_meta = hybrid_targeted_map.get(int(agent.id))
+            seller_signal_packet = self._build_seller_market_signal_packet(
+                cursor,
+                agent,
+                int(month),
+                holding_lock_months=holding_lock_months,
+            )
+            setattr(agent, "_seller_market_signal_packet", seller_signal_packet)
+            lifecycle_packet = build_activation_lifecycle_packet(
+                agent,
+                month,
+                min_cash_observer=min_cash_observer,
+                holding_lock_months=holding_lock_months,
+                market_signal_packet=seller_signal_packet,
+            )
+            lifecycle_labels = set(lifecycle_packet.get("labels", []) or [])
+            seller_signal_priority = bool(
+                {"LOCAL_PRICE_PUSH_WINDOW", "REPLACEMENT_OLD_HOME_RELEASE"} & lifecycle_labels
+            ) and "SELLER_REWAKE_COOLDOWN" not in lifecycle_labels
             if force_buy_lock:
-                llm_candidate_entries.append({"agent": agent, "score": max(float(score), float(high_cut)), "force_buy_lock": True})
+                llm_candidate_entries.append({"agent": agent, "score": max(float(score), float(high_cut)), "force_buy_lock": True, "targeted_bucket": bool(targeted_meta)})
+                continue
+            if seller_signal_priority:
+                llm_candidate_entries.append(
+                    {
+                        "agent": agent,
+                        "score": max(float(score), float(low_cut)),
+                        "force_buy_lock": False,
+                        "targeted_bucket": bool(targeted_meta),
+                        "seller_signal_priority": True,
+                    }
+                )
+                setattr(agent, "_role_signature_last", signature)
+                continue
+            if targeted_meta:
+                llm_candidate_entries.append(
+                    {
+                        "agent": agent,
+                        "score": max(float(score), float(low_cut)),
+                        "force_buy_lock": False,
+                        "targeted_bucket": True,
+                    }
+                )
                 continue
 
             if router_enabled and score < low_cut:
@@ -3053,15 +4413,19 @@ class AgentService:
 
             # Keep medium/high score cohort for LLM path.
             if (not router_enabled) or score >= low_cut or score >= high_cut:
-                llm_candidate_entries.append({"agent": agent, "score": float(score), "force_buy_lock": False})
+                llm_candidate_entries.append({"agent": agent, "score": float(score), "force_buy_lock": False, "targeted_bucket": False})
 
         # Monthly ROLE_DECISION budget gate:
         # if budget is tight, keep higher-score candidates first and downgrade the rest.
         budget_cfg = self._resolve_role_budget_cfg()
         self._rollover_role_budget_if_needed(month=int(month))
         if budget_cfg["enabled"] and llm_candidate_entries:
-            forced_entries = [row for row in llm_candidate_entries if bool(row.get("force_buy_lock", False))]
-            normal_entries = [row for row in llm_candidate_entries if not bool(row.get("force_buy_lock", False))]
+            protected_entries = [
+                row for row in llm_candidate_entries if bool(row.get("force_buy_lock", False)) or bool(row.get("targeted_bucket", False))
+            ]
+            normal_entries = [
+                row for row in llm_candidate_entries if not bool(row.get("force_buy_lock", False)) and not bool(row.get("targeted_bucket", False))
+            ]
             # Sort descending by activation score, then stable ID tie-break.
             normal_entries.sort(
                 key=lambda x: (float(x.get("score", 0.0)), -int(x["agent"].id)),
@@ -3081,7 +4445,7 @@ class AgentService:
 
             kept_entries = normal_entries[:allowed_candidates]
             downgraded_entries = normal_entries[allowed_candidates:]
-            llm_candidate_entries = forced_entries + kept_entries
+            llm_candidate_entries = protected_entries + kept_entries
             if downgraded_entries:
                 for row in downgraded_entries:
                     aid = int(row["agent"].id)
@@ -3262,6 +4626,11 @@ class AgentService:
                 }
                 for item in sublist:
                     if isinstance(item, dict):
+                        targeted_meta = hybrid_targeted_map.get(int(item.get("id", -1) or -1))
+                        if targeted_meta:
+                            item["_decision_origin"] = "hybrid_bucket_targeted_llm"
+                            item["_hybrid_bucket_targeted"] = True
+                            item["_hybrid_bucket_target_meta"] = dict(targeted_meta)
                         item["_info_delay_months"] = int(meta.get("delay", 0))
                         item["_delayed_trend"] = str(meta.get("trend", market_trend))
                         item["_visible_bulletins"] = int(meta.get("visible_bulletins", len(recent_bulletins or [])))
@@ -3292,9 +4661,11 @@ class AgentService:
         batch_active_state_update = []
         batch_finance_update = []  # New: Persist Tier 6 finance data
         batch_bulletin_exposure = []
+        timing_role_counter: Dict[str, int] = {}
 
         # Pre-calc property map for fast lookup
         props_map = {p['property_id']: p for p in market.properties}
+        buyer_seller_split_cfg = self._buyer_seller_intent_split_cfg()
 
         for d in decisions_flat:
             a_id = d.get("id")
@@ -3327,6 +4698,34 @@ class AgentService:
                     seen_bulletin_month = int((delayed_bulletins[-1] or {}).get("month", 0) or 0)
                 except Exception:
                     seen_bulletin_month = 0
+            activation_packet = getattr(agent, "_activation_persona_packet", {}) or {}
+            decision_origin = str(d.get("_decision_origin", "llm_batch") or "llm_batch")
+            decision_profile = "smart" if str(getattr(agent, "agent_type", "normal") or "normal").lower() == "smart" else "normal"
+            d = dict(d or {})
+            lifecycle_packet = build_activation_lifecycle_packet(
+                agent,
+                month,
+                min_cash_observer=min_cash_observer,
+                holding_lock_months=self._min_holding_months_before_resale(),
+                market_signal_packet=getattr(agent, "_seller_market_signal_packet", {}) or {},
+            )
+            behavior_modifier = build_behavior_modifier(agent, decision_profile, info_delay_months)
+            timing_role = self._resolve_timing_role(
+                agent=agent,
+                role_str=role_str,
+                decision_payload=d,
+                lifecycle_packet=lifecycle_packet,
+            )
+            urgency_level = self._resolve_decision_urgency(d)
+            d.setdefault("timing_role", timing_role)
+            d.setdefault("urgency_level", urgency_level)
+            d.setdefault("lifecycle_labels", lifecycle_packet.get("labels", []))
+            d.setdefault("lifecycle_summary", lifecycle_packet.get("summary", ""))
+            d.setdefault("behavior_modifier", behavior_modifier)
+            agent.timing_role = timing_role
+            agent.decision_urgency = urgency_level
+            agent.lifecycle_labels = list(lifecycle_packet.get("labels", []) or [])
+            agent.lifecycle_summary = str(lifecycle_packet.get("summary", "") or "")
 
             buy_task_locked = bool(getattr(agent, "_buy_task_locked", False))
             buy_task_exhausted = bool(getattr(agent, "_search_exhausted", False))
@@ -3341,8 +4740,103 @@ class AgentService:
                         f"{d.get('reason', '')} | forced keep buy lane after outbid"
                     ).strip(" |")
                     role_str = locked_role
+                    d["role"] = role_str
+                    preserved_chain_mode = ""
+                    if role_str == "BUYER_SELLER":
+                        preserved_chain_mode = str(
+                            d.get("chain_mode")
+                            or getattr(agent, "chain_mode", "")
+                            or ""
+                        ).strip().lower()
+                        if preserved_chain_mode in {"sell_first", "buy_first"}:
+                            d["chain_mode"] = preserved_chain_mode
+                    if role_str == "BUYER":
+                        forced_timing_role = TIMING_ROLE_BUY_NOW
+                    elif preserved_chain_mode == "sell_first":
+                        forced_timing_role = TIMING_ROLE_SELL_THEN_BUY
+                    else:
+                        forced_timing_role = TIMING_ROLE_BUY_NOW
+                    d["timing_role"] = forced_timing_role
+                    timing_role = forced_timing_role
+                    d["timing_role"] = timing_role
+                    agent.timing_role = timing_role
 
+            if role_str == "BUYER_SELLER" and self._should_split_buyer_seller_intent(
+                decision_origin=decision_origin,
+                decision_profile=decision_profile,
+                decision_payload=d,
+            ):
+                split_result = await determine_buyer_seller_chain_mode_async(
+                    agent,
+                    month,
+                    market,
+                    macro_summary=macro_desc,
+                    market_trend=delayed_trend,
+                    recent_bulletins=delayed_bulletins,
+                    decision_profile=decision_profile,
+                    prior_reason=str(d.get("reason", "") or ""),
+                    model_type=str(buyer_seller_split_cfg.get("model_type", "fast") or "fast"),
+                )
+                split_choice = str((split_result or {}).get("chain_mode", "") or "").strip().lower()
+                split_reason = str((split_result or {}).get("reason", "") or "").strip()
+                split_llm_called = bool((split_result or {}).get("llm_called", True))
+                if split_choice not in {"buy_first", "sell_first"}:
+                    split_choice = self._resolve_chain_mode(agent, d)
+                    split_reason = split_reason or "fallback_to_default_chain_mode"
+                d = dict(d or {})
+                d["_buyer_seller_split_choice"] = split_choice
+                d["_buyer_seller_split_reason"] = split_reason
+                d["_buyer_seller_split_llm_called"] = split_llm_called
+                d["_buyer_seller_split_applied"] = True
+                if split_choice in {"buy_first", "sell_first"}:
+                    d["chain_mode"] = split_choice
+                chain_metrics = json.dumps(
+                    {
+                        "role_route_source": decision_origin,
+                        "decision_profile": decision_profile,
+                        "buyer_seller_split_choice": split_choice,
+                        "buyer_seller_split_reason": split_reason,
+                        "buyer_seller_split_llm_called": split_llm_called,
+                        "profile_bucket_id": str(
+                            activation_packet.get("profile_bucket_id", getattr(agent, "profile_bucket_id", "")) or ""
+                        ),
+                        "runtime_parent_bucket_id": str(
+                            activation_packet.get("runtime_parent_bucket_id", "") or ""
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+                batch_decision_logs.append(
+                    (
+                        int(a_id),
+                        int(month),
+                        "CHAIN_MODE",
+                        split_choice.upper(),
+                        split_reason or "BUYER_SELLER monthly action split",
+                        json.dumps(
+                            {
+                                "prior_role": "BUYER_SELLER",
+                                "decision_origin": decision_origin,
+                                "decision_profile": decision_profile,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        chain_metrics,
+                        split_llm_called,
+                    )
+                )
+                timing_role = self._resolve_timing_role(
+                    agent=agent,
+                    role_str=role_str,
+                    decision_payload=d,
+                    lifecycle_packet=lifecycle_packet,
+                )
+                d["timing_role"] = timing_role
+                agent.timing_role = timing_role
             if role_str == "OBSERVER":
+                timing_role_counter[str(d.get("timing_role", timing_role) or timing_role)] = (
+                    timing_role_counter.get(str(d.get("timing_role", timing_role) or timing_role), 0) + 1
+                )
                 if self.is_v2:
                     reason_text = d.get('reason', 'No immediate need')
                     trigger_text = str(d.get("trigger", "") or "")
@@ -3355,10 +4849,36 @@ class AgentService:
                             } and ("signature_cache_hit" not in reason_text),
                         )
                     )
-                    # Append extra None for context_metrics
+                    observer_context_metrics = json.dumps(
+                        {
+                            "m14_info_delay_months": info_delay_months,
+                            "m14_delayed_trend": delayed_trend,
+                            "m14_visible_bulletins": visible_bulletins,
+                            "role_route_source": str(d.get("_decision_origin", trigger_text or "observer") or "observer"),
+                            "activation_llm_called": bool(llm_called_flag),
+                            "profile_bucket_id": str(
+                                activation_packet.get("profile_bucket_id", getattr(agent, "profile_bucket_id", "")) or ""
+                            ),
+                            "runtime_parent_bucket_id": str(
+                                activation_packet.get("runtime_parent_bucket_id", "") or ""
+                            ),
+                            "role_side_hint": str(activation_packet.get("role_side_hint", "") or ""),
+                            "hybrid_bucket_targeted": bool(d.get("_hybrid_bucket_targeted", False)),
+                            "bucket_supply_pressure": str(activation_packet.get("bucket_supply_pressure", "") or ""),
+                            "buyer_seller_split_choice": str(d.get("_buyer_seller_split_choice", "") or ""),
+                            "buyer_seller_split_reason": str(d.get("_buyer_seller_split_reason", "") or ""),
+                            "buyer_seller_split_llm_called": bool(d.get("_buyer_seller_split_llm_called", False)),
+                            "timing_role": str(d.get("timing_role", timing_role) or timing_role),
+                            "decision_urgency": str(d.get("urgency_level", urgency_level) or urgency_level),
+                            "lifecycle_labels": list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or []),
+                            "lifecycle_summary": str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or ""),
+                            "behavior_modifier": d.get("behavior_modifier", behavior_modifier),
+                        },
+                        ensure_ascii=False,
+                    )
                     batch_decision_logs.append((
                         a_id, month, "ROLE_DECISION", "OBSERVER",
-                        reason_text, json.dumps(d), None, llm_called_flag
+                        reason_text, json.dumps(d), observer_context_metrics, llm_called_flag
                     ))
                     batch_bulletin_exposure.append(
                         (
@@ -3384,16 +4904,46 @@ class AgentService:
                         "life_pressure": str(d.get("life_pressure", "patient")),
                         "price_expectation": float(d.get("price_expectation", 1.0) or 1.0),
                         "risk_mode": str(d.get("risk_mode", "balanced")),
+                        "timing_role": str(d.get("timing_role", timing_role) or timing_role),
+                        "urgency_level": str(d.get("urgency_level", urgency_level) or urgency_level),
+                        "lifecycle_labels": list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or []),
+                        "lifecycle_summary": str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or ""),
                     }
                     self._cache_store_role_decision(signature, month=int(month), decision=cache_payload)
                 continue
 
             # Configurable hard constraint: no-property + low-cash must remain OBSERVER
             if (not agent.owned_properties) and (agent.cash < min_cash_observer):
+                forced_timing_role = TIMING_ROLE_NEED_WAIT if lifecycle_packet.get("labels") else TIMING_ROLE_OBSERVE_WAIT
+                d["timing_role"] = forced_timing_role
+                timing_role_counter[forced_timing_role] = timing_role_counter.get(forced_timing_role, 0) + 1
+                observer_context_metrics = json.dumps(
+                    {
+                        "m14_info_delay_months": info_delay_months,
+                        "m14_delayed_trend": delayed_trend,
+                        "m14_visible_bulletins": visible_bulletins,
+                        "role_route_source": str(d.get("_decision_origin", "min_cash_observer_guard") or "min_cash_observer_guard"),
+                        "activation_llm_called": False,
+                        "profile_bucket_id": str(
+                            activation_packet.get("profile_bucket_id", getattr(agent, "profile_bucket_id", "")) or ""
+                        ),
+                        "runtime_parent_bucket_id": str(
+                            activation_packet.get("runtime_parent_bucket_id", "") or ""
+                        ),
+                        "role_side_hint": str(activation_packet.get("role_side_hint", "") or ""),
+                        "hybrid_bucket_targeted": bool(d.get("_hybrid_bucket_targeted", False)),
+                        "bucket_supply_pressure": str(activation_packet.get("bucket_supply_pressure", "") or ""),
+                        "timing_role": forced_timing_role,
+                        "decision_urgency": urgency_level,
+                        "lifecycle_labels": list(lifecycle_packet.get("labels", []) or []),
+                        "lifecycle_summary": str(lifecycle_packet.get("summary", "") or ""),
+                    },
+                    ensure_ascii=False,
+                )
                 batch_decision_logs.append((
                     a_id, month, "ROLE_DECISION", "OBSERVER",
                     f"System constrained by min_cash_observer_no_property={min_cash_observer:,.0f}",
-                    json.dumps(d), None, False
+                    json.dumps(d), observer_context_metrics, False
                 ))
                 batch_bulletin_exposure.append(
                     (
@@ -3415,6 +4965,11 @@ class AgentService:
             agent.role = role_str
             agent.role_duration = 1
             agent.life_pressure = d.get("life_pressure", "patient")
+            agent.timing_role = str(d.get("timing_role", timing_role) or timing_role)
+            agent.decision_urgency = str(d.get("urgency_level", urgency_level) or urgency_level)
+            agent.lifecycle_labels = list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or [])
+            agent.lifecycle_summary = str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or "")
+            timing_role_counter[agent.timing_role] = timing_role_counter.get(agent.timing_role, 0) + 1
             agent.consecutive_failures = 0
             agent.cooldown_months = 0
             agent.waited_months = 0
@@ -3597,7 +5152,6 @@ class AgentService:
 
             # Normalize metrics for JSON storage
             metrics_json = json.dumps(metrics) if metrics else None
-
             # Log Phase 8: context_metrics
             batch_decision_logs.append((
                 agent.id, month, "ROLE_DECISION", role_str,
@@ -3614,6 +5168,23 @@ class AgentService:
                         if int(agent.id) in llm_score_map
                         else None
                     ),
+                    "profile_bucket_id": str(
+                        activation_packet.get("profile_bucket_id", getattr(agent, "profile_bucket_id", "")) or ""
+                    ),
+                    "runtime_parent_bucket_id": str(
+                        activation_packet.get("runtime_parent_bucket_id", "") or ""
+                    ),
+                    "role_side_hint": str(activation_packet.get("role_side_hint", "") or ""),
+                    "hybrid_bucket_targeted": bool(d.get("_hybrid_bucket_targeted", False)),
+                    "bucket_supply_pressure": str(activation_packet.get("bucket_supply_pressure", "") or ""),
+                    "buyer_seller_split_choice": str(d.get("_buyer_seller_split_choice", "") or ""),
+                    "buyer_seller_split_reason": str(d.get("_buyer_seller_split_reason", "") or ""),
+                    "buyer_seller_split_llm_called": bool(d.get("_buyer_seller_split_llm_called", False)),
+                    "timing_role": str(d.get("timing_role", timing_role) or timing_role),
+                    "decision_urgency": str(d.get("urgency_level", urgency_level) or urgency_level),
+                    "lifecycle_labels": list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or []),
+                    "lifecycle_summary": str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or ""),
+                    "behavior_modifier": d.get("behavior_modifier", behavior_modifier),
                 }, ensure_ascii=False),
                 bool(decision_llm_called)
             ))
@@ -3643,6 +5214,10 @@ class AgentService:
                     "price_expectation": float(d.get("price_expectation", 1.0) or 1.0),
                     "risk_mode": str(d.get("risk_mode", "balanced")),
                     "chain_mode": d.get("chain_mode"),
+                    "timing_role": str(d.get("timing_role", timing_role) or timing_role),
+                    "urgency_level": str(d.get("urgency_level", urgency_level) or urgency_level),
+                    "lifecycle_labels": list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or []),
+                    "lifecycle_summary": str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or ""),
                 }
                 self._cache_store_role_decision(signature, month=int(month), decision=cache_payload)
 
@@ -3680,19 +5255,28 @@ class AgentService:
                     activation_trigger,
                     school_urgency,
                 ))
-                batch_active_state_update.append((
-                    target_buy_price,
-                    target_sell_price,
-                    risk_mode,
-                    max_wait_months,
-                    waited_months,
-                    cooldown_months,
-                    consecutive_failures,
-                    chain_mode,
-                    sell_completed,
-                    buy_completed,
-                    agent.id,
-                ))
+                batch_active_state_update.append(
+                    {
+                        "target_buy_price": target_buy_price,
+                        "target_sell_price": target_sell_price,
+                        "risk_mode": risk_mode,
+                        "max_wait_months": max_wait_months,
+                        "waited_months": waited_months,
+                        "cooldown_months": cooldown_months,
+                        "consecutive_failures": consecutive_failures,
+                        "chain_mode": chain_mode,
+                        "sell_completed": sell_completed,
+                        "buy_completed": buy_completed,
+                        "timing_role": str(d.get("timing_role", timing_role) or timing_role),
+                        "decision_urgency": str(d.get("urgency_level", urgency_level) or urgency_level),
+                        "lifecycle_labels": json.dumps(
+                            list(d.get("lifecycle_labels", lifecycle_packet.get("labels", [])) or []),
+                            ensure_ascii=False,
+                        ),
+                        "lifecycle_summary": str(d.get("lifecycle_summary", lifecycle_packet.get("summary", "")) or ""),
+                        "agent_id": agent.id,
+                    }
+                )
 
         if batch_active_insert:
             # Snapshot semantics: keep only one active record per agent.
@@ -3773,28 +5357,35 @@ class AgentService:
 
             # Side-car update for long-cycle state columns (M12/M13/M15/M17).
             cols = self._table_columns("active_participants")
-            required_cols = {
-                "target_buy_price", "target_sell_price", "risk_mode", "max_wait_months",
-                "waited_months", "cooldown_months", "consecutive_failures",
-                "chain_mode", "sell_completed", "buy_completed"
-            }
-            if required_cols.issubset(cols) and batch_active_state_update:
+            update_cols = [
+                "target_buy_price",
+                "target_sell_price",
+                "risk_mode",
+                "max_wait_months",
+                "waited_months",
+                "cooldown_months",
+                "consecutive_failures",
+                "chain_mode",
+                "sell_completed",
+                "buy_completed",
+                "timing_role",
+                "decision_urgency",
+                "lifecycle_labels",
+                "lifecycle_summary",
+            ]
+            available_update_cols = [col for col in update_cols if col in cols]
+            if "agent_id" in cols and available_update_cols and batch_active_state_update:
+                sql = (
+                    "UPDATE active_participants SET "
+                    + ", ".join(f"{col}=?" for col in available_update_cols)
+                    + " WHERE agent_id=?"
+                )
                 cursor.executemany(
-                    """
-                    UPDATE active_participants
-                    SET target_buy_price=?,
-                        target_sell_price=?,
-                        risk_mode=?,
-                        max_wait_months=?,
-                        waited_months=?,
-                        cooldown_months=?,
-                        consecutive_failures=?,
-                        chain_mode=?,
-                        sell_completed=?,
-                        buy_completed=?
-                    WHERE agent_id=?
-                    """,
-                    batch_active_state_update,
+                    sql,
+                    [
+                        tuple(item.get(col) for col in available_update_cols) + (item["agent_id"],)
+                        for item in batch_active_state_update
+                    ],
                 )
 
         # Persist Finance Updates (Tier 6)
@@ -3810,13 +5401,17 @@ class AgentService:
             "stage1_prefilter_candidates": int(stage1_candidate_count),
             "stage1_prefilter_skipped": int(max(0, len(self.agents) - stage1_candidate_count)),
             "llm_candidate_count": int(len(candidates)),
+            "targeted_llm_candidate_count": int(sum(1 for row in llm_candidate_entries if bool(row.get("targeted_bucket", False)))),
             "smart_llm_candidates": int(len(smart_candidates)),
             "normal_llm_candidates": int(len(normal_candidates)),
             "synthetic_decision_count": int(len(synthetic_decisions)),
+            "activation_mode": str(activation_governance_cfg.get("activation_mode", "natural") or "natural"),
+            "targeted_bucket_ids": sorted({str(item.get("bucket_id", "")) for item in hybrid_targeted_map.values() if item}),
             "optimization_counters": {k: int(v) for k, v in optimization_counters.items()},
             "llm_batch_calls": int(locals().get("activation_batches", 0) or 0),
             "activation_batch_size": int(BATCH_SIZE),
             "activation_serial_mode": bool(self._activation_serial_mode),
+            "timing_role_counts": {k: int(v) for k, v in sorted(timing_role_counter.items())},
         }
         batch_decision_logs.append(
             (
@@ -3830,6 +5425,31 @@ class AgentService:
                 False,
             )
         )
+        batch_decision_logs.append(
+            (
+                0,
+                int(month),
+                "ROLE_ACTIVATION_GOVERNANCE_SUMMARY",
+                str(activation_governance_cfg.get("activation_mode", "natural") or "natural").upper(),
+                "Activation governance summary",
+                None,
+                json.dumps(
+                    {
+                        "activation_mode": str(activation_governance_cfg.get("activation_mode", "natural") or "natural"),
+                        "gate_mode": str(activation_governance_cfg.get("gate_mode", "warn") or "warn"),
+                        "profiled_market_required": bool(activation_governance_cfg.get("profiled_market_required", False)),
+                        "hard_bucket_matcher_required": bool(activation_governance_cfg.get("hard_bucket_matcher_required", False)),
+                        "hybrid_floor_enabled": bool(activation_governance_cfg.get("hybrid_floor_enabled", False)),
+                        "hybrid_floor_strategy": str(activation_governance_cfg.get("hybrid_floor_strategy", "bucket_targeted_llm_first") or "bucket_targeted_llm_first"),
+                        "autofill_supply_floor": int(activation_governance_cfg.get("autofill_supply_floor", 0) or 0),
+                        "autofill_demand_floor": int(activation_governance_cfg.get("autofill_demand_floor", 0) or 0),
+                        "emit_bucket_funnel": bool(activation_governance_cfg.get("emit_bucket_funnel", True)),
+                    },
+                    ensure_ascii=False,
+                ),
+                False,
+            )
+        )
 
         self.conn.commit()
 
@@ -3840,6 +5460,7 @@ class AgentService:
         cursor = self.conn.cursor()
         properties_to_list = []
         strategy_hint = "balanced"
+        hold_months_required = self._min_holding_months_before_resale()
 
         # Calculate strategy first
         zone_prices = {z: market.get_avg_price(z) for z in ["A", "B"]}
@@ -3912,6 +5533,35 @@ class AgentService:
         # M16: prevent extreme sell-side dumping in one month.
         # Apply only to smart agents; normal agents keep baseline behavior.
         target_ids = list(dict.fromkeys(target_ids or []))
+
+        blocked_recent_ids: List[int] = []
+        eligible_owned_properties: List[Dict[str, Any]] = []
+        for owned_prop in list(getattr(agent, "owned_properties", []) or []):
+            try:
+                pid = int(owned_prop.get("property_id"))
+            except Exception:
+                continue
+            acquired_raw = owned_prop.get("acquired_month")
+            acquired_month = None
+            if acquired_raw not in (None, ""):
+                try:
+                    acquired_month = int(acquired_raw)
+                except Exception:
+                    acquired_month = None
+            if (
+                acquired_month is not None
+                and hold_months_required > 0
+                and int(month) - int(acquired_month) < int(hold_months_required)
+            ):
+                blocked_recent_ids.append(pid)
+                continue
+            eligible_owned_properties.append(owned_prop)
+        eligible_owned_ids = {int(prop.get("property_id")) for prop in eligible_owned_properties if prop.get("property_id") is not None}
+        target_ids = [pid for pid in target_ids if int(pid) in eligible_owned_ids]
+        decision["min_holding_months_before_resale"] = int(hold_months_required)
+        decision["recent_purchase_sell_blocked_property_ids"] = [int(pid) for pid in blocked_recent_ids]
+        decision["eligible_sell_property_ids"] = sorted(int(pid) for pid in eligible_owned_ids)
+
         if getattr(agent, "agent_type", "normal") == "smart":
             try:
                 max_sells_per_month = int(
@@ -3960,11 +5610,22 @@ class AgentService:
                         "m16_sell_cap_applied": bool(decision.get("m16_sell_cap_applied", False)),
                         "m16_sell_cap": int(decision.get("m16_sell_cap", effective_sell_cap)),
                         "m16_sell_cap_reason": decision.get("m16_sell_cap_reason", ""),
+                        "recent_purchase_sell_blocked_count": int(len(blocked_recent_ids)),
+                        "recent_purchase_sell_blocked_property_ids": [int(pid) for pid in blocked_recent_ids],
+                        "min_holding_months_before_resale": int(hold_months_required),
                     }
                 )
 
-        if not target_ids and agent.owned_properties:
-            target_ids = [agent.owned_properties[0]['property_id']]
+        if metrics is None:
+            metrics = {}
+        if isinstance(metrics, dict):
+            metrics.setdefault("recent_purchase_sell_blocked_count", int(len(blocked_recent_ids)))
+            metrics.setdefault("recent_purchase_sell_blocked_property_ids", [int(pid) for pid in blocked_recent_ids])
+            metrics.setdefault("min_holding_months_before_resale", int(hold_months_required))
+            metrics.setdefault("eligible_sell_property_count", int(len(eligible_owned_ids)))
+
+        if not target_ids and eligible_owned_properties:
+            target_ids = [eligible_owned_properties[0]['property_id']]
 
         decision["properties_to_sell"] = target_ids
         decision["pricing_coefficient"] = pricing_coefficient

@@ -1,0 +1,1442 @@
+profiled_market_mode:
+  enabled: false
+  profile_pack_id: line_a_profile_pack_v2_cn_household
+  profile_pack_version: v2
+  profile_pack_locale: zh-CN
+  persona_generation_mode: code_only
+  background_library_path: config/persona_background_library.json
+  activation_prompt_mode: compact_persona_packet_v2
+  startup_bucket_precheck: true
+  enforce_bucket_alignment: true
+  hard_bucket_matcher_enabled: true
+  hard_bucket_include_soft_buckets: false
+  hard_bucket_require_profiled_buyer: true
+  hard_bucket_strict_unmapped_property: true
+  runtime_sync_profiled_property_buckets: true
+  preserve_no_home_buckets: true
+  experiment_modes:
+    abundant:
+      description: 画像匹配且供给相对充足
+    scarce:
+      description: 压缩关键供给桶以制造阶段性卖方压力
+  agent_profile_fields:
+    life_stage:
+      required: true
+      enum:
+      - young_single_entry
+      - young_couple_pre_child
+      - young_family_with_child
+      - mid_family_dual_care
+      - multi_child_expansion
+      - household_split
+      - silver_upgrade
+      - high_networth_mature
+    household_structure:
+      required: true
+      enum:
+      - solo
+      - couple
+      - couple_one_child
+      - couple_two_plus_children
+      - three_generation
+      - split_household
+    housing_stage:
+      required: true
+      enum:
+      - starter_no_home
+      - rent_to_buy
+      - owner_first_upgrade
+      - owner_multi_asset_reallocate
+      - endgame_retirement_upgrade
+      - one_to_multi_unit_split
+    education_strategy:
+      required: true
+      enum:
+      - public_school_strong
+      - public_school_preferred
+      - school_optional
+      - private_or_international
+      - education_not_salient
+    asset_state:
+      required: true
+      enum:
+      - cash_constrained
+      - cashflow_sensitive
+      - balanced_finance
+      - asset_reallocation
+      - high_networth_preservation
+    care_burden:
+      required: true
+      enum:
+      - light
+      - childcare_heavy
+      - eldercare_heavy
+      - dual_care_heavy
+    location_logic:
+      required: true
+      enum:
+      - commute_first
+      - education_first
+      - core_preservation_first
+      - comfort_environment_first
+      - cost_efficiency_first
+    risk_style:
+      required: true
+      enum:
+      - conservative
+      - balanced
+      - assertive
+  property_profile_fields:
+    zone_tier:
+      required: true
+      enum:
+      - core
+      - sub_core
+      - peripheral
+    school_tier:
+      required: true
+      enum:
+      - non_school
+      - general_school
+      - strong_school
+    product_segment:
+      required: true
+      enum:
+      - starter
+      - starter_upgrade
+      - improve
+      - luxury
+      - senior_friendly
+    household_fit:
+      required: true
+      enum:
+      - solo_fit
+      - small_family_fit
+      - three_person_fit
+      - multi_child_fit
+      - eldercare_fit
+    value_logic:
+      required: true
+      enum:
+      - cost_effective
+      - self_use_comfort
+      - preservation
+      - scarcity
+    transaction_liquidity_band:
+      required: true
+      enum:
+      - high
+      - medium
+      - low
+  agent_profile_buckets:
+    Y_ENTRY_SOLO_COST:
+      role_side: buyer
+      count: 6
+      agent_profile:
+        life_stage: young_single_entry
+        household_structure: solo
+        housing_stage: starter_no_home
+        education_strategy: education_not_salient
+        asset_state: cash_constrained
+        care_burden: light
+        location_logic: cost_efficiency_first
+        risk_style: conservative
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: starter_home
+        housing_stage: starter_no_home
+        family_stage: single_or_couple_no_children
+        education_path: not_school_sensitive
+        financial_profile: cashflow_sensitive
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: B
+        need_school_district: false
+        min_bedrooms: 1
+        property_type_target: STARTER
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 700000
+        - 1200000
+        max_price_range:
+        - 900000
+        - 1450000
+        cash_range:
+        - 180000
+        - 420000
+        income_range:
+        - 14000
+        - 24000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.22
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+        crowd_mode_hint: normal_following
+      initialization_constraints:
+        preserve_no_home: true
+        starter_entry_priority: true
+    Y_ENTRY_FAMILY_SCHOOL:
+      role_side: buyer
+      count: 8
+      agent_profile:
+        life_stage: young_family_with_child
+        household_structure: couple_one_child
+        housing_stage: starter_no_home
+        education_strategy: public_school_strong
+        asset_state: cashflow_sensitive
+        care_burden: childcare_heavy
+        location_logic: education_first
+        risk_style: conservative
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: starter_home
+        housing_stage: starter_no_home
+        family_stage: young_children
+        education_path: public_school_preferred
+        financial_profile: cashflow_sensitive
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: B
+        need_school_district: true
+        min_bedrooms: 3
+        property_type_target: STARTER_UPGRADE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 1200000
+        - 1800000
+        max_price_range:
+        - 1500000
+        - 2200000
+        cash_range:
+        - 280000
+        - 520000
+        income_range:
+        - 18000
+        - 30000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.24
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+        crowd_mode_hint: normal_following
+      initialization_constraints:
+        preserve_no_home: true
+        starter_entry_priority: true
+    Y_ENTRY_FAMILY_NONSCHOOL:
+      role_side: buyer
+      count: 6
+      agent_profile:
+        life_stage: young_family_with_child
+        household_structure: couple_one_child
+        housing_stage: rent_to_buy
+        education_strategy: school_optional
+        asset_state: cashflow_sensitive
+        care_burden: childcare_heavy
+        location_logic: cost_efficiency_first
+        risk_style: conservative
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: starter_home
+        housing_stage: starter_no_home
+        family_stage: young_children
+        education_path: not_school_sensitive
+        financial_profile: cashflow_sensitive
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: B
+        need_school_district: false
+        min_bedrooms: 2
+        property_type_target: STARTER_UPGRADE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 1000000
+        - 1600000
+        max_price_range:
+        - 1300000
+        - 2000000
+        cash_range:
+        - 260000
+        - 500000
+        income_range:
+        - 18000
+        - 28000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.24
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+        crowd_mode_hint: normal_following
+      initialization_constraints:
+        preserve_no_home: true
+        starter_entry_priority: true
+    UPGRADE_YOUNG_SCHOOL:
+      role_side: buyer
+      count: 6
+      agent_profile:
+        life_stage: young_family_with_child
+        household_structure: couple_one_child
+        housing_stage: owner_first_upgrade
+        education_strategy: public_school_strong
+        asset_state: balanced_finance
+        care_burden: childcare_heavy
+        location_logic: education_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: education_driven
+        housing_stage: owner_upgrade
+        family_stage: primary_school_before_transition
+        education_path: public_school_district_priority
+        financial_profile: balanced_finance
+        seller_profile: owner_occupier_upgrade
+      preference_profile:
+        target_zone: A
+        need_school_district: true
+        min_bedrooms: 3
+        property_type_target: IMPROVE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 4500000
+        - 6200000
+        max_price_range:
+        - 5200000
+        - 7000000
+        cash_range:
+        - 1500000
+        - 2800000
+        income_range:
+        - 35000
+        - 70000
+        payment_tolerance_ratio: 0.45
+        down_payment_tolerance_ratio: 0.3
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+        crowd_mode_hint: balanced_information
+      initialization_constraints:
+        preserve_no_home: false
+        allow_multi_property_seed: false
+    UPGRADE_YOUNG_COMFORT:
+      role_side: buyer
+      count: 6
+      agent_profile:
+        life_stage: young_couple_pre_child
+        household_structure: couple
+        housing_stage: owner_first_upgrade
+        education_strategy: school_optional
+        asset_state: balanced_finance
+        care_burden: light
+        location_logic: comfort_environment_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: upgrade_living
+        housing_stage: owner_upgrade
+        family_stage: married_no_children
+        education_path: not_school_sensitive
+        financial_profile: balanced_finance
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 2
+        property_type_target: IMPROVE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 3600000
+        - 5200000
+        max_price_range:
+        - 4200000
+        - 5800000
+        cash_range:
+        - 1200000
+        - 2200000
+        income_range:
+        - 30000
+        - 60000
+        payment_tolerance_ratio: 0.42
+        down_payment_tolerance_ratio: 0.28
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 0
+        crowd_mode_hint: balanced_information
+      initialization_constraints:
+        preserve_no_home: false
+    MID_DUALCARE_BALANCED:
+      role_side: buyer
+      count: 5
+      agent_profile:
+        life_stage: mid_family_dual_care
+        household_structure: three_generation
+        housing_stage: owner_first_upgrade
+        education_strategy: public_school_preferred
+        asset_state: balanced_finance
+        care_burden: dual_care_heavy
+        location_logic: commute_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: family_balance
+        housing_stage: owner_upgrade
+        family_stage: dual_care_pressure
+        education_path: public_school_preferred
+        financial_profile: balanced_finance
+        seller_profile: owner_occupier_upgrade
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 3
+        property_type_target: IMPROVE
+        property_type_must_level: medium
+        max_wait_months: 4
+      budget_profile:
+        target_buy_price_range:
+        - 3200000
+        - 4800000
+        max_price_range:
+        - 3800000
+        - 5600000
+        cash_range:
+        - 1000000
+        - 2000000
+        income_range:
+        - 28000
+        - 52000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.28
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 1
+        crowd_mode_hint: balanced_information
+      initialization_constraints:
+        preserve_no_home: false
+    MULTI_CHILD_EXPAND:
+      role_side: buyer
+      count: 4
+      agent_profile:
+        life_stage: multi_child_expansion
+        household_structure: couple_two_plus_children
+        housing_stage: owner_first_upgrade
+        education_strategy: public_school_preferred
+        asset_state: balanced_finance
+        care_burden: childcare_heavy
+        location_logic: comfort_environment_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: multi_child_upgrade
+        housing_stage: owner_upgrade
+        family_stage: multi_children
+        education_path: public_school_preferred
+        financial_profile: balanced_finance
+        seller_profile: owner_occupier_upgrade
+      preference_profile:
+        target_zone: B
+        need_school_district: false
+        min_bedrooms: 4
+        property_type_target: IMPROVE
+        property_type_must_level: strong
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 2200000
+        - 3800000
+        max_price_range:
+        - 2800000
+        - 4500000
+        cash_range:
+        - 700000
+        - 1600000
+        income_range:
+        - 24000
+        - 48000
+        payment_tolerance_ratio: 0.42
+        down_payment_tolerance_ratio: 0.28
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 1
+        crowd_mode_hint: family_following
+    HOUSEHOLD_SPLIT_MULTIUNIT:
+      role_side: buyer
+      count: 4
+      agent_profile:
+        life_stage: household_split
+        household_structure: split_household
+        housing_stage: one_to_multi_unit_split
+        education_strategy: school_optional
+        asset_state: asset_reallocation
+        care_burden: light
+        location_logic: cost_efficiency_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: household_split
+        housing_stage: owner_upgrade
+        family_stage: split_household
+        education_path: school_optional
+        financial_profile: balanced_finance
+        seller_profile: asset_reallocator
+      preference_profile:
+        target_zone: B
+        need_school_district: false
+        min_bedrooms: 1
+        property_type_target: STARTER
+        property_type_must_level: medium
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 900000
+        - 1500000
+        max_price_range:
+        - 1200000
+        - 2200000
+        cash_range:
+        - 500000
+        - 1400000
+        income_range:
+        - 22000
+        - 42000
+        payment_tolerance_ratio: 0.4
+        down_payment_tolerance_ratio: 0.25
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 1
+        crowd_mode_hint: balanced_information
+    SILVER_COMFORT_HEALTH:
+      role_side: buyer
+      count: 4
+      agent_profile:
+        life_stage: silver_upgrade
+        household_structure: couple
+        housing_stage: endgame_retirement_upgrade
+        education_strategy: education_not_salient
+        asset_state: asset_reallocation
+        care_burden: light
+        location_logic: comfort_environment_first
+        risk_style: conservative
+      story_profile:
+        investment_style: conservative
+        purchase_motive_primary: retirement_living
+        housing_stage: owner_upgrade
+        family_stage: late_life
+        education_path: not_school_sensitive
+        financial_profile: asset_reallocation
+        seller_profile: patient_holder
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 2
+        property_type_target: SENIOR_FRIENDLY
+        property_type_must_level: strong
+        max_wait_months: 8
+      budget_profile:
+        target_buy_price_range:
+        - 2800000
+        - 5200000
+        max_price_range:
+        - 3400000
+        - 6200000
+        cash_range:
+        - 1200000
+        - 3200000
+        income_range:
+        - 18000
+        - 50000
+        payment_tolerance_ratio: 0.36
+        down_payment_tolerance_ratio: 0.35
+      runtime_profile:
+        agent_type: normal
+        info_delay_months: 1
+        crowd_mode_hint: low_frequency
+    HNW_CORE_PRESERVATION:
+      role_side: buyer
+      count: 3
+      agent_profile:
+        life_stage: high_networth_mature
+        household_structure: couple
+        housing_stage: owner_multi_asset_reallocate
+        education_strategy: school_optional
+        asset_state: high_networth_preservation
+        care_burden: light
+        location_logic: core_preservation_first
+        risk_style: assertive
+      story_profile:
+        investment_style: aggressive
+        purchase_motive_primary: preservation_upgrade
+        housing_stage: owner_upgrade
+        family_stage: mature_family
+        education_path: school_optional
+        financial_profile: high_networth
+        seller_profile: asset_reallocator
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 4
+        property_type_target: LUXURY
+        property_type_must_level: strong
+        max_wait_months: 9
+      budget_profile:
+        target_buy_price_range:
+        - 10000000
+        - 18000000
+        max_price_range:
+        - 13000000
+        - 22000000
+        cash_range:
+        - 5000000
+        - 12000000
+        income_range:
+        - 80000
+        - 200000
+        payment_tolerance_ratio: 0.5
+        down_payment_tolerance_ratio: 0.4
+      runtime_profile:
+        agent_type: smart
+        info_delay_months: 0
+        crowd_mode_hint: low_following
+    HNW_PRIVATE_EDU:
+      role_side: buyer
+      count: 2
+      agent_profile:
+        life_stage: high_networth_mature
+        household_structure: couple_one_child
+        housing_stage: owner_multi_asset_reallocate
+        education_strategy: private_or_international
+        asset_state: high_networth_preservation
+        care_burden: childcare_heavy
+        location_logic: core_preservation_first
+        risk_style: assertive
+      story_profile:
+        investment_style: aggressive
+        purchase_motive_primary: private_edu_upgrade
+        housing_stage: owner_upgrade
+        family_stage: high_income_with_child
+        education_path: private_or_international
+        financial_profile: high_networth
+        seller_profile: asset_reallocator
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 4
+        property_type_target: LUXURY
+        property_type_must_level: strong
+        max_wait_months: 9
+      budget_profile:
+        target_buy_price_range:
+        - 9000000
+        - 16000000
+        max_price_range:
+        - 12000000
+        - 20000000
+        cash_range:
+        - 4500000
+        - 10000000
+        income_range:
+        - 70000
+        - 180000
+        payment_tolerance_ratio: 0.5
+        down_payment_tolerance_ratio: 0.4
+      runtime_profile:
+        agent_type: smart
+        info_delay_months: 0
+        crowd_mode_hint: low_following
+    ASSET_REALLOCATOR:
+      role_side: buyer_seller
+      count: 3
+      agent_profile:
+        life_stage: high_networth_mature
+        household_structure: couple
+        housing_stage: owner_multi_asset_reallocate
+        education_strategy: school_optional
+        asset_state: asset_reallocation
+        care_burden: light
+        location_logic: core_preservation_first
+        risk_style: balanced
+      story_profile:
+        investment_style: balanced
+        purchase_motive_primary: asset_reallocation
+        housing_stage: owner_upgrade
+        family_stage: mature_family
+        education_path: school_optional
+        financial_profile: asset_reallocation
+        seller_profile: asset_reallocator
+      preference_profile:
+        target_zone: A
+        need_school_district: false
+        min_bedrooms: 2
+        property_type_target: IMPROVE
+        property_type_must_level: medium
+        max_wait_months: 6
+      budget_profile:
+        target_buy_price_range:
+        - 3000000
+        - 8000000
+        max_price_range:
+        - 4000000
+        - 10000000
+        cash_range:
+        - 1500000
+        - 5000000
+        income_range:
+        - 35000
+        - 120000
+        payment_tolerance_ratio: 0.46
+        down_payment_tolerance_ratio: 0.32
+      runtime_profile:
+        agent_type: smart
+        info_delay_months: 0
+        crowd_mode_hint: low_following
+  property_profile_buckets:
+    CORE_STRONG_SCHOOL_STARTER:
+      reverse_primary_required: false
+      property_profile:
+        zone_tier: core
+        school_tier: strong_school
+        product_segment: starter
+        household_fit: three_person_fit
+        value_logic: preservation
+        transaction_liquidity_band: high
+      market_profile:
+        zone: A
+        is_school_district: true
+        property_type_bucket: JUST
+        bedroom_range:
+        - 2
+        - 3
+        building_area_range:
+        - 70
+        - 95
+        quality_range:
+        - 2
+        - 3
+        price_range:
+        - 2500000
+        - 4200000
+      count_by_supply_mode:
+        abundant: 8
+        scarce: 3
+    CORE_STRONG_SCHOOL_IMPROVE:
+      property_profile:
+        zone_tier: core
+        school_tier: strong_school
+        product_segment: improve
+        household_fit: three_person_fit
+        value_logic: preservation
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: A
+        is_school_district: true
+        property_type_bucket: IMPROVE
+        bedroom_range:
+        - 3
+        - 4
+        building_area_range:
+        - 95
+        - 135
+        quality_range:
+        - 2
+        - 3
+        price_range:
+        - 4500000
+        - 6800000
+      count_by_supply_mode:
+        abundant: 12
+        scarce: 4
+    CORE_NONSCHOOL_IMPROVE:
+      property_profile:
+        zone_tier: core
+        school_tier: non_school
+        product_segment: improve
+        household_fit: small_family_fit
+        value_logic: self_use_comfort
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: A
+        is_school_district: false
+        property_type_bucket: IMPROVE
+        bedroom_range:
+        - 2
+        - 4
+        building_area_range:
+        - 85
+        - 125
+        quality_range:
+        - 2
+        - 3
+        price_range:
+        - 3600000
+        - 5600000
+      count_by_supply_mode:
+        abundant: 12
+        scarce: 5
+    CORE_LUXURY_PRESERVATION:
+      property_profile:
+        zone_tier: core
+        school_tier: non_school
+        product_segment: luxury
+        household_fit: small_family_fit
+        value_logic: scarcity
+        transaction_liquidity_band: low
+      market_profile:
+        zone: A
+        is_school_district: false
+        property_type_bucket: LUXURY
+        bedroom_range:
+        - 4
+        - 6
+        building_area_range:
+        - 160
+        - 260
+        quality_range:
+        - 4
+        - 5
+        price_range:
+        - 12000000
+        - 24000000
+      count_by_supply_mode:
+        abundant: 3
+        scarce: 2
+    SUBCORE_GENERAL_SCHOOL_STARTER:
+      property_profile:
+        zone_tier: sub_core
+        school_tier: general_school
+        product_segment: starter
+        household_fit: three_person_fit
+        value_logic: cost_effective
+        transaction_liquidity_band: high
+      market_profile:
+        zone: B
+        is_school_district: true
+        property_type_bucket: JUST
+        bedroom_range:
+        - 2
+        - 3
+        building_area_range:
+        - 70
+        - 95
+        quality_range:
+        - 1
+        - 2
+        price_range:
+        - 900000
+        - 1800000
+      count_by_supply_mode:
+        abundant: 11
+        scarce: 5
+    SUBCORE_NONSCHOOL_STARTER:
+      property_profile:
+        zone_tier: sub_core
+        school_tier: non_school
+        product_segment: starter
+        household_fit: solo_fit
+        value_logic: cost_effective
+        transaction_liquidity_band: high
+      market_profile:
+        zone: B
+        is_school_district: false
+        property_type_bucket: JUST
+        bedroom_range:
+        - 1
+        - 2
+        building_area_range:
+        - 50
+        - 80
+        quality_range:
+        - 1
+        - 2
+        price_range:
+        - 650000
+        - 1400000
+      count_by_supply_mode:
+        abundant: 11
+        scarce: 6
+    SUBCORE_IMPROVE_FAMILY:
+      property_profile:
+        zone_tier: sub_core
+        school_tier: general_school
+        product_segment: improve
+        household_fit: three_person_fit
+        value_logic: self_use_comfort
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: B
+        is_school_district: true
+        property_type_bucket: IMPROVE
+        bedroom_range:
+        - 3
+        - 4
+        building_area_range:
+        - 95
+        - 130
+        quality_range:
+        - 2
+        - 3
+        price_range:
+        - 2200000
+        - 4200000
+      count_by_supply_mode:
+        abundant: 9
+        scarce: 3
+    PERIPHERAL_COST_STARTER:
+      property_profile:
+        zone_tier: peripheral
+        school_tier: non_school
+        product_segment: starter
+        household_fit: solo_fit
+        value_logic: cost_effective
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: B
+        is_school_district: false
+        property_type_bucket: JUST
+        bedroom_range:
+        - 1
+        - 2
+        building_area_range:
+        - 45
+        - 70
+        quality_range:
+        - 1
+        - 2
+        price_range:
+        - 500000
+        - 1000000
+      count_by_supply_mode:
+        abundant: 10
+        scarce: 4
+    PERIPHERAL_MULTI_CHILD_LARGE:
+      property_profile:
+        zone_tier: peripheral
+        school_tier: general_school
+        product_segment: starter_upgrade
+        household_fit: multi_child_fit
+        value_logic: self_use_comfort
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: B
+        is_school_district: false
+        property_type_bucket: IMPROVE
+        bedroom_range:
+        - 4
+        - 5
+        building_area_range:
+        - 120
+        - 170
+        quality_range:
+        - 2
+        - 3
+        price_range:
+        - 1800000
+        - 3600000
+      count_by_supply_mode:
+        abundant: 8
+        scarce: 3
+    SENIOR_FRIENDLY_COMFORT:
+      property_profile:
+        zone_tier: sub_core
+        school_tier: non_school
+        product_segment: senior_friendly
+        household_fit: eldercare_fit
+        value_logic: self_use_comfort
+        transaction_liquidity_band: medium
+      market_profile:
+        zone: A
+        is_school_district: false
+        property_type_bucket: IMPROVE
+        bedroom_range:
+        - 2
+        - 3
+        building_area_range:
+        - 85
+        - 120
+        quality_range:
+        - 3
+        - 4
+        price_range:
+        - 3000000
+        - 5600000
+      count_by_supply_mode:
+        abundant: 7
+        scarce: 2
+  bucket_alignment_rules:
+  - agent_bucket_id: Y_ENTRY_SOLO_COST
+    eligible_property_buckets:
+    - PERIPHERAL_COST_STARTER
+    - SUBCORE_NONSCHOOL_STARTER
+    soft_property_buckets:
+    - SUBCORE_GENERAL_SCHOOL_STARTER
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 4
+    mismatch_focus:
+    - budget_overlap_gap
+    - household_fit_gap
+  - agent_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+    eligible_property_buckets:
+    - SUBCORE_GENERAL_SCHOOL_STARTER
+    - CORE_STRONG_SCHOOL_STARTER
+    soft_property_buckets:
+    - SUBCORE_IMPROVE_FAMILY
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 3
+    mismatch_focus:
+    - education_strategy_gap
+    - household_fit_gap
+  - agent_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+    eligible_property_buckets:
+    - SUBCORE_NONSCHOOL_STARTER
+    - PERIPHERAL_COST_STARTER
+    soft_property_buckets:
+    - SUBCORE_GENERAL_SCHOOL_STARTER
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 4
+    mismatch_focus:
+    - budget_overlap_gap
+    - life_stage_fit_gap
+  - agent_bucket_id: UPGRADE_YOUNG_SCHOOL
+    eligible_property_buckets:
+    - CORE_STRONG_SCHOOL_IMPROVE
+    - SUBCORE_IMPROVE_FAMILY
+    soft_property_buckets:
+    - CORE_NONSCHOOL_IMPROVE
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 3
+    mismatch_focus:
+    - education_strategy_gap
+    - budget_overlap_gap
+  - agent_bucket_id: UPGRADE_YOUNG_COMFORT
+    eligible_property_buckets:
+    - CORE_NONSCHOOL_IMPROVE
+    - SUBCORE_IMPROVE_FAMILY
+    soft_property_buckets:
+    - CORE_STRONG_SCHOOL_IMPROVE
+    min_eligible_supply_abundant: 8
+    min_eligible_supply_scarce: 4
+    mismatch_focus:
+    - life_stage_fit_gap
+    - household_fit_gap
+  - agent_bucket_id: MID_DUALCARE_BALANCED
+    eligible_property_buckets:
+    - SUBCORE_IMPROVE_FAMILY
+    - CORE_NONSCHOOL_IMPROVE
+    soft_property_buckets:
+    - CORE_STRONG_SCHOOL_IMPROVE
+    min_eligible_supply_abundant: 6
+    min_eligible_supply_scarce: 3
+    mismatch_focus:
+    - life_stage_fit_gap
+    - liquidity_gap
+  - agent_bucket_id: MULTI_CHILD_EXPAND
+    eligible_property_buckets:
+    - PERIPHERAL_MULTI_CHILD_LARGE
+    - SUBCORE_IMPROVE_FAMILY
+    soft_property_buckets:
+    - CORE_NONSCHOOL_IMPROVE
+    min_eligible_supply_abundant: 5
+    min_eligible_supply_scarce: 2
+    mismatch_focus:
+    - household_fit_gap
+    - life_stage_fit_gap
+  - agent_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+    eligible_property_buckets:
+    - SUBCORE_NONSCHOOL_STARTER
+    - PERIPHERAL_COST_STARTER
+    soft_property_buckets:
+    - SUBCORE_GENERAL_SCHOOL_STARTER
+    min_eligible_supply_abundant: 5
+    min_eligible_supply_scarce: 3
+    mismatch_focus:
+    - household_fit_gap
+    - asset_state_gap
+  - agent_bucket_id: SILVER_COMFORT_HEALTH
+    eligible_property_buckets:
+    - SENIOR_FRIENDLY_COMFORT
+    - CORE_NONSCHOOL_IMPROVE
+    soft_property_buckets:
+    - SUBCORE_IMPROVE_FAMILY
+    min_eligible_supply_abundant: 4
+    min_eligible_supply_scarce: 2
+    mismatch_focus:
+    - life_stage_fit_gap
+    - liquidity_gap
+  - agent_bucket_id: HNW_CORE_PRESERVATION
+    eligible_property_buckets:
+    - CORE_LUXURY_PRESERVATION
+    - CORE_NONSCHOOL_IMPROVE
+    soft_property_buckets:
+    - CORE_STRONG_SCHOOL_IMPROVE
+    min_eligible_supply_abundant: 3
+    min_eligible_supply_scarce: 1
+    mismatch_focus:
+    - asset_state_gap
+    - liquidity_gap
+  - agent_bucket_id: HNW_PRIVATE_EDU
+    eligible_property_buckets:
+    - CORE_LUXURY_PRESERVATION
+    - CORE_NONSCHOOL_IMPROVE
+    soft_property_buckets:
+    - CORE_STRONG_SCHOOL_IMPROVE
+    min_eligible_supply_abundant: 2
+    min_eligible_supply_scarce: 1
+    mismatch_focus:
+    - education_strategy_gap
+    - asset_state_gap
+  - agent_bucket_id: ASSET_REALLOCATOR
+    eligible_property_buckets:
+    - CORE_LUXURY_PRESERVATION
+    - CORE_NONSCHOOL_IMPROVE
+    - SUBCORE_IMPROVE_FAMILY
+    soft_property_buckets:
+    - SENIOR_FRIENDLY_COMFORT
+    min_eligible_supply_abundant: 5
+    min_eligible_supply_scarce: 2
+    mismatch_focus:
+    - asset_state_gap
+    - liquidity_gap
+  mismatch_audit_contract:
+    planned_supply_metrics:
+      enabled: true
+    runtime_supply_metrics:
+      enabled: true
+    required_checks:
+    - budget_overlap_gap
+    - life_stage_fit_gap
+    - education_strategy_gap
+    - asset_state_gap
+    - household_fit_gap
+    - liquidity_gap
+    thresholds:
+      severe_bucket_deficit_ratio: 5.0
+      warn_bucket_deficit_ratio: 3.0
+      zero_supply_is_block: true
+    runtime_supply_views:
+    - planned_supply_by_bucket
+    - runtime_owned_supply_by_bucket
+    - runtime_for_sale_supply_by_bucket
+  runtime_parent_buckets:
+    ENTRY_SCHOOL_PARENT:
+      child_demand_buckets:
+      - Y_ENTRY_FAMILY_SCHOOL
+      child_supply_buckets:
+      - SUBCORE_GENERAL_SCHOOL_STARTER
+      - CORE_STRONG_SCHOOL_STARTER
+    ENTRY_NONSCHOOL_PARENT:
+      child_demand_buckets:
+      - Y_ENTRY_SOLO_COST
+      - Y_ENTRY_FAMILY_NONSCHOOL
+      - HOUSEHOLD_SPLIT_MULTIUNIT
+      child_supply_buckets:
+      - SUBCORE_NONSCHOOL_STARTER
+      - PERIPHERAL_COST_STARTER
+    UPGRADE_PARENT:
+      child_demand_buckets:
+      - UPGRADE_YOUNG_SCHOOL
+      - UPGRADE_YOUNG_COMFORT
+      - MID_DUALCARE_BALANCED
+      - MULTI_CHILD_EXPAND
+      child_supply_buckets:
+      - CORE_STRONG_SCHOOL_IMPROVE
+      - CORE_NONSCHOOL_IMPROVE
+      - SUBCORE_IMPROVE_FAMILY
+      - PERIPHERAL_MULTI_CHILD_LARGE
+    SENIOR_PARENT:
+      child_demand_buckets:
+      - SILVER_COMFORT_HEALTH
+      child_supply_buckets:
+      - SENIOR_FRIENDLY_COMFORT
+    HNW_PARENT:
+      child_demand_buckets:
+      - HNW_CORE_PRESERVATION
+      - HNW_PRIVATE_EDU
+      child_supply_buckets:
+      - CORE_LUXURY_PRESERVATION
+      - CORE_STRONG_SCHOOL_IMPROVE
+      - CORE_NONSCHOOL_IMPROVE
+    REALLOCATOR_PARENT:
+      child_demand_buckets:
+      - ASSET_REALLOCATOR
+      child_supply_buckets:
+      - CORE_LUXURY_PRESERVATION
+      - CORE_NONSCHOOL_IMPROVE
+      - SUBCORE_IMPROVE_FAMILY
+      - SENIOR_FRIENDLY_COMFORT
+  canonical_bucket_policy:
+    enabled: true
+    strict_match_required_for_canonical: true
+    fallback_bucket_prefix: FALLBACK_SUPPLY_
+    forbid_promote_fallback_into_canonical: true
+    protected_parent_buckets:
+    - ENTRY_SCHOOL_PARENT
+    - ENTRY_NONSCHOOL_PARENT
+  compatibility_graph_v1:
+    demand_to_supply:
+    - demand_bucket_id: Y_ENTRY_SOLO_COST
+      supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: Y_ENTRY_SOLO_COST
+      supply_bucket_id: PERIPHERAL_COST_STARTER
+      relation_type: primary
+      budget_overlap_min: 50000
+      confidence_weight: 0.9
+    - demand_bucket_id: Y_ENTRY_SOLO_COST
+      supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.35
+    - demand_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+      supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+      supply_bucket_id: CORE_STRONG_SCHOOL_STARTER
+      relation_type: secondary
+      budget_overlap_min: 200000
+      confidence_weight: 0.35
+    - demand_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.25
+    - demand_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+      supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+      supply_bucket_id: PERIPHERAL_COST_STARTER
+      relation_type: primary
+      budget_overlap_min: 0
+      confidence_weight: 0.8
+    - demand_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+      supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.25
+    - demand_bucket_id: UPGRADE_YOUNG_SCHOOL
+      supply_bucket_id: CORE_STRONG_SCHOOL_IMPROVE
+      relation_type: primary
+      budget_overlap_min: 200000
+      confidence_weight: 1.0
+    - demand_bucket_id: UPGRADE_YOUNG_SCHOOL
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.4
+    - demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: primary
+      budget_overlap_min: 200000
+      confidence_weight: 1.0
+    - demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: primary
+      budget_overlap_min: 0
+      confidence_weight: 0.75
+    - demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      supply_bucket_id: CORE_STRONG_SCHOOL_IMPROVE
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.2
+    - demand_bucket_id: MID_DUALCARE_BALANCED
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 0.9
+    - demand_bucket_id: MID_DUALCARE_BALANCED
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 0.9
+    - demand_bucket_id: MULTI_CHILD_EXPAND
+      supply_bucket_id: PERIPHERAL_MULTI_CHILD_LARGE
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: MULTI_CHILD_EXPAND
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 0.8
+    - demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      supply_bucket_id: PERIPHERAL_COST_STARTER
+      relation_type: primary
+      budget_overlap_min: 0
+      confidence_weight: 0.75
+    - demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.2
+    - demand_bucket_id: SILVER_COMFORT_HEALTH
+      supply_bucket_id: SENIOR_FRIENDLY_COMFORT
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 1.0
+    - demand_bucket_id: SILVER_COMFORT_HEALTH
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: secondary
+      budget_overlap_min: 100000
+      confidence_weight: 0.5
+    - demand_bucket_id: HNW_CORE_PRESERVATION
+      supply_bucket_id: CORE_LUXURY_PRESERVATION
+      relation_type: primary
+      budget_overlap_min: 500000
+      confidence_weight: 1.0
+    - demand_bucket_id: HNW_CORE_PRESERVATION
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.15
+    - demand_bucket_id: HNW_PRIVATE_EDU
+      supply_bucket_id: CORE_LUXURY_PRESERVATION
+      relation_type: primary
+      budget_overlap_min: 500000
+      confidence_weight: 1.0
+    - demand_bucket_id: HNW_PRIVATE_EDU
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.15
+    - demand_bucket_id: ASSET_REALLOCATOR
+      supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 0.8
+    - demand_bucket_id: ASSET_REALLOCATOR
+      supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      relation_type: primary
+      budget_overlap_min: 100000
+      confidence_weight: 0.75
+    - demand_bucket_id: ASSET_REALLOCATOR
+      supply_bucket_id: CORE_LUXURY_PRESERVATION
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.25
+    - demand_bucket_id: ASSET_REALLOCATOR
+      supply_bucket_id: SENIOR_FRIENDLY_COMFORT
+      relation_type: secondary
+      budget_overlap_min: 0
+      confidence_weight: 0.2
+    supply_to_demand:
+    - supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      demand_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      relation_type: secondary
+      reverse_confidence_weight: 0.25
+    - supply_bucket_id: SUBCORE_GENERAL_SCHOOL_STARTER
+      demand_bucket_id: Y_ENTRY_SOLO_COST
+      relation_type: secondary
+      reverse_confidence_weight: 0.2
+    - supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      demand_bucket_id: Y_ENTRY_SOLO_COST
+      relation_type: primary
+      reverse_confidence_weight: 0.9
+    - supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      demand_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+      relation_type: primary
+      reverse_confidence_weight: 0.9
+    - supply_bucket_id: SUBCORE_NONSCHOOL_STARTER
+      demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: PERIPHERAL_COST_STARTER
+      demand_bucket_id: Y_ENTRY_SOLO_COST
+      relation_type: primary
+      reverse_confidence_weight: 0.9
+    - supply_bucket_id: PERIPHERAL_COST_STARTER
+      demand_bucket_id: Y_ENTRY_FAMILY_NONSCHOOL
+      relation_type: primary
+      reverse_confidence_weight: 0.8
+    - supply_bucket_id: PERIPHERAL_COST_STARTER
+      demand_bucket_id: HOUSEHOLD_SPLIT_MULTIUNIT
+      relation_type: primary
+      reverse_confidence_weight: 0.75
+    - supply_bucket_id: CORE_STRONG_SCHOOL_STARTER
+      demand_bucket_id: Y_ENTRY_FAMILY_SCHOOL
+      relation_type: secondary
+      reverse_confidence_weight: 0.35
+    - supply_bucket_id: CORE_STRONG_SCHOOL_IMPROVE
+      demand_bucket_id: UPGRADE_YOUNG_SCHOOL
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: CORE_STRONG_SCHOOL_IMPROVE
+      demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      relation_type: secondary
+      reverse_confidence_weight: 0.2
+    - supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      demand_bucket_id: MID_DUALCARE_BALANCED
+      relation_type: primary
+      reverse_confidence_weight: 0.8
+    - supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      demand_bucket_id: SILVER_COMFORT_HEALTH
+      relation_type: secondary
+      reverse_confidence_weight: 0.5
+    - supply_bucket_id: CORE_NONSCHOOL_IMPROVE
+      demand_bucket_id: ASSET_REALLOCATOR
+      relation_type: primary
+      reverse_confidence_weight: 0.8
+    - supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      demand_bucket_id: UPGRADE_YOUNG_COMFORT
+      relation_type: primary
+      reverse_confidence_weight: 0.75
+    - supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      demand_bucket_id: MID_DUALCARE_BALANCED
+      relation_type: primary
+      reverse_confidence_weight: 0.9
+    - supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      demand_bucket_id: MULTI_CHILD_EXPAND
+      relation_type: primary
+      reverse_confidence_weight: 0.8
+    - supply_bucket_id: SUBCORE_IMPROVE_FAMILY
+      demand_bucket_id: ASSET_REALLOCATOR
+      relation_type: primary
+      reverse_confidence_weight: 0.7
+    - supply_bucket_id: PERIPHERAL_MULTI_CHILD_LARGE
+      demand_bucket_id: MULTI_CHILD_EXPAND
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: SENIOR_FRIENDLY_COMFORT
+      demand_bucket_id: SILVER_COMFORT_HEALTH
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: SENIOR_FRIENDLY_COMFORT
+      demand_bucket_id: ASSET_REALLOCATOR
+      relation_type: secondary
+      reverse_confidence_weight: 0.2
+    - supply_bucket_id: CORE_LUXURY_PRESERVATION
+      demand_bucket_id: HNW_CORE_PRESERVATION
+      relation_type: primary
+      reverse_confidence_weight: 1.0
+    - supply_bucket_id: CORE_LUXURY_PRESERVATION
+      demand_bucket_id: HNW_PRIVATE_EDU
+      relation_type: primary
+      reverse_confidence_weight: 0.9
+    - supply_bucket_id: CORE_LUXURY_PRESERVATION
+      demand_bucket_id: ASSET_REALLOCATOR
+      relation_type: secondary
+      reverse_confidence_weight: 0.25

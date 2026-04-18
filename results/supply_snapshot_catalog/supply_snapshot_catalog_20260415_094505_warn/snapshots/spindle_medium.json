@@ -1,0 +1,1877 @@
+{
+  "snapshot_row": {
+    "snapshot_id": "spindle_medium",
+    "catalog_id": "supply_snapshot_catalog_v1",
+    "catalog_version": 1,
+    "recommended_snapshot_id": "spindle_medium",
+    "profile_pack_artifact": "profile_packs/spindle_medium.yaml",
+    "structure_family": "spindle",
+    "size_profile": "medium",
+    "recommended_use": "默认基准盘 / A-B 桥接研究",
+    "experiment_mode": "abundant",
+    "snapshot_status": "pass",
+    "status_summary": "结构覆盖通过",
+    "status_failures": "",
+    "status_warnings": "",
+    "total_selected_supply": 91,
+    "supply_bucket_count": 10,
+    "total_agents_profiled": 57,
+    "demand_bucket_count": 12,
+    "graph_ok": 1,
+    "budget_ok": 1,
+    "reverse_coverage_ok": 1,
+    "runtime_parent_ok": 1,
+    "zero_affordable_bucket_count": 0,
+    "thin_affordable_bucket_count": 0,
+    "competition_hotspot_bucket_count": 0,
+    "missing_primary_supply_bucket_count": 0,
+    "missing_primary_demand_bucket_count": 0,
+    "unaffordable_primary_edge_count": 0
+  },
+  "status_info": {
+    "snapshot_status": "pass",
+    "status_summary": "结构覆盖通过",
+    "status_failures": [],
+    "status_warnings": [],
+    "budget_ok": true,
+    "graph_ok": true,
+    "reverse_coverage_ok": true,
+    "runtime_parent_ok": true,
+    "zero_affordable_bucket_count": 0,
+    "thin_affordable_bucket_count": 0,
+    "competition_hotspot_bucket_count": 0,
+    "missing_primary_supply_bucket_count": 0,
+    "missing_primary_demand_bucket_count": 0,
+    "unaffordable_primary_edge_count": 0,
+    "uncovered_primary_supply_bucket_count": 0
+  },
+  "governance_snapshot": {
+    "identity": {
+      "profile_pack_path": "D:\\GitProj\\visual_real_estate\\config\\line_a_profile_pack_v2_template.yaml",
+      "experiment_mode": "abundant",
+      "seed": 606,
+      "group": "spindle_medium",
+      "months": 3,
+      "agent_count": 12
+    },
+    "identity_hash": "214e95833f035c68",
+    "demand_library": {
+      "total_agents_profiled": 57,
+      "bucket_count": 12,
+      "buckets": [
+        {
+          "bucket_id": "ASSET_REALLOCATOR",
+          "count": 3,
+          "role_side": "buyer_seller",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "IMPROVE",
+          "max_price_range": [
+            4000000.0,
+            10000000.0
+          ],
+          "target_buy_price_range": [
+            3000000.0,
+            8000000.0
+          ],
+          "cash_range": [
+            1500000.0,
+            5000000.0
+          ],
+          "income_range": [
+            35000.0,
+            120000.0
+          ],
+          "agent_type": "smart",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "HNW_CORE_PRESERVATION",
+          "count": 3,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "LUXURY",
+          "max_price_range": [
+            13000000.0,
+            22000000.0
+          ],
+          "target_buy_price_range": [
+            10000000.0,
+            18000000.0
+          ],
+          "cash_range": [
+            5000000.0,
+            12000000.0
+          ],
+          "income_range": [
+            80000.0,
+            200000.0
+          ],
+          "agent_type": "smart",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "HNW_PRIVATE_EDU",
+          "count": 2,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "LUXURY",
+          "max_price_range": [
+            12000000.0,
+            20000000.0
+          ],
+          "target_buy_price_range": [
+            9000000.0,
+            16000000.0
+          ],
+          "cash_range": [
+            4500000.0,
+            10000000.0
+          ],
+          "income_range": [
+            70000.0,
+            180000.0
+          ],
+          "agent_type": "smart",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "HOUSEHOLD_SPLIT_MULTIUNIT",
+          "count": 4,
+          "role_side": "buyer",
+          "target_zone": "B",
+          "need_school_district": false,
+          "property_type_target": "STARTER",
+          "max_price_range": [
+            1200000.0,
+            2200000.0
+          ],
+          "target_buy_price_range": [
+            900000.0,
+            1500000.0
+          ],
+          "cash_range": [
+            500000.0,
+            1400000.0
+          ],
+          "income_range": [
+            22000.0,
+            42000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 1
+        },
+        {
+          "bucket_id": "MID_DUALCARE_BALANCED",
+          "count": 5,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "IMPROVE",
+          "max_price_range": [
+            3800000.0,
+            5600000.0
+          ],
+          "target_buy_price_range": [
+            3200000.0,
+            4800000.0
+          ],
+          "cash_range": [
+            1000000.0,
+            2000000.0
+          ],
+          "income_range": [
+            28000.0,
+            52000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 1
+        },
+        {
+          "bucket_id": "MULTI_CHILD_EXPAND",
+          "count": 4,
+          "role_side": "buyer",
+          "target_zone": "B",
+          "need_school_district": false,
+          "property_type_target": "IMPROVE",
+          "max_price_range": [
+            2800000.0,
+            4500000.0
+          ],
+          "target_buy_price_range": [
+            2200000.0,
+            3800000.0
+          ],
+          "cash_range": [
+            700000.0,
+            1600000.0
+          ],
+          "income_range": [
+            24000.0,
+            48000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 1
+        },
+        {
+          "bucket_id": "SILVER_COMFORT_HEALTH",
+          "count": 4,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "SENIOR_FRIENDLY",
+          "max_price_range": [
+            3400000.0,
+            6200000.0
+          ],
+          "target_buy_price_range": [
+            2800000.0,
+            5200000.0
+          ],
+          "cash_range": [
+            1200000.0,
+            3200000.0
+          ],
+          "income_range": [
+            18000.0,
+            50000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 1
+        },
+        {
+          "bucket_id": "UPGRADE_YOUNG_COMFORT",
+          "count": 6,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": false,
+          "property_type_target": "IMPROVE",
+          "max_price_range": [
+            4200000.0,
+            5800000.0
+          ],
+          "target_buy_price_range": [
+            3600000.0,
+            5200000.0
+          ],
+          "cash_range": [
+            1200000.0,
+            2200000.0
+          ],
+          "income_range": [
+            30000.0,
+            60000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "UPGRADE_YOUNG_SCHOOL",
+          "count": 6,
+          "role_side": "buyer",
+          "target_zone": "A",
+          "need_school_district": true,
+          "property_type_target": "IMPROVE",
+          "max_price_range": [
+            5200000.0,
+            7000000.0
+          ],
+          "target_buy_price_range": [
+            4500000.0,
+            6200000.0
+          ],
+          "cash_range": [
+            1500000.0,
+            2800000.0
+          ],
+          "income_range": [
+            35000.0,
+            70000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "Y_ENTRY_FAMILY_NONSCHOOL",
+          "count": 6,
+          "role_side": "buyer",
+          "target_zone": "B",
+          "need_school_district": false,
+          "property_type_target": "STARTER_UPGRADE",
+          "max_price_range": [
+            1300000.0,
+            2000000.0
+          ],
+          "target_buy_price_range": [
+            1000000.0,
+            1600000.0
+          ],
+          "cash_range": [
+            260000.0,
+            500000.0
+          ],
+          "income_range": [
+            18000.0,
+            28000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "Y_ENTRY_FAMILY_SCHOOL",
+          "count": 8,
+          "role_side": "buyer",
+          "target_zone": "B",
+          "need_school_district": true,
+          "property_type_target": "STARTER_UPGRADE",
+          "max_price_range": [
+            1500000.0,
+            2200000.0
+          ],
+          "target_buy_price_range": [
+            1200000.0,
+            1800000.0
+          ],
+          "cash_range": [
+            280000.0,
+            520000.0
+          ],
+          "income_range": [
+            18000.0,
+            30000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 0
+        },
+        {
+          "bucket_id": "Y_ENTRY_SOLO_COST",
+          "count": 6,
+          "role_side": "buyer",
+          "target_zone": "B",
+          "need_school_district": false,
+          "property_type_target": "STARTER",
+          "max_price_range": [
+            900000.0,
+            1450000.0
+          ],
+          "target_buy_price_range": [
+            700000.0,
+            1200000.0
+          ],
+          "cash_range": [
+            180000.0,
+            420000.0
+          ],
+          "income_range": [
+            14000.0,
+            24000.0
+          ],
+          "agent_type": "normal",
+          "info_delay_months": 0
+        }
+      ]
+    },
+    "supply_library": {
+      "experiment_mode": "abundant",
+      "total_selected_supply": 91,
+      "bucket_count": 10,
+      "buckets": [
+        {
+          "bucket_id": "CORE_LUXURY_PRESERVATION",
+          "zone": "A",
+          "is_school_district": false,
+          "property_type_bucket": "LUXURY",
+          "price_range": [
+            12000000.0,
+            24000000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 3,
+            "scarce": 2
+          },
+          "count_selected_mode": 3
+        },
+        {
+          "bucket_id": "CORE_NONSCHOOL_IMPROVE",
+          "zone": "A",
+          "is_school_district": false,
+          "property_type_bucket": "IMPROVE",
+          "price_range": [
+            3600000.0,
+            5600000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 12,
+            "scarce": 5
+          },
+          "count_selected_mode": 12
+        },
+        {
+          "bucket_id": "CORE_STRONG_SCHOOL_IMPROVE",
+          "zone": "A",
+          "is_school_district": true,
+          "property_type_bucket": "IMPROVE",
+          "price_range": [
+            4500000.0,
+            6800000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 12,
+            "scarce": 4
+          },
+          "count_selected_mode": 12
+        },
+        {
+          "bucket_id": "CORE_STRONG_SCHOOL_STARTER",
+          "zone": "A",
+          "is_school_district": true,
+          "property_type_bucket": "JUST",
+          "price_range": [
+            2500000.0,
+            4200000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 8,
+            "scarce": 3
+          },
+          "count_selected_mode": 8
+        },
+        {
+          "bucket_id": "PERIPHERAL_COST_STARTER",
+          "zone": "B",
+          "is_school_district": false,
+          "property_type_bucket": "JUST",
+          "price_range": [
+            500000.0,
+            1000000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 10,
+            "scarce": 4
+          },
+          "count_selected_mode": 10
+        },
+        {
+          "bucket_id": "PERIPHERAL_MULTI_CHILD_LARGE",
+          "zone": "B",
+          "is_school_district": false,
+          "property_type_bucket": "IMPROVE",
+          "price_range": [
+            1800000.0,
+            3600000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 8,
+            "scarce": 3
+          },
+          "count_selected_mode": 8
+        },
+        {
+          "bucket_id": "SENIOR_FRIENDLY_COMFORT",
+          "zone": "A",
+          "is_school_district": false,
+          "property_type_bucket": "IMPROVE",
+          "price_range": [
+            3000000.0,
+            5600000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 7,
+            "scarce": 2
+          },
+          "count_selected_mode": 7
+        },
+        {
+          "bucket_id": "SUBCORE_GENERAL_SCHOOL_STARTER",
+          "zone": "B",
+          "is_school_district": true,
+          "property_type_bucket": "JUST",
+          "price_range": [
+            900000.0,
+            1800000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 11,
+            "scarce": 5
+          },
+          "count_selected_mode": 11
+        },
+        {
+          "bucket_id": "SUBCORE_IMPROVE_FAMILY",
+          "zone": "B",
+          "is_school_district": true,
+          "property_type_bucket": "IMPROVE",
+          "price_range": [
+            2200000.0,
+            4200000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 9,
+            "scarce": 3
+          },
+          "count_selected_mode": 9
+        },
+        {
+          "bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+          "zone": "B",
+          "is_school_district": false,
+          "property_type_bucket": "JUST",
+          "price_range": [
+            650000.0,
+            1400000.0
+          ],
+          "count_by_supply_mode": {
+            "abundant": 11,
+            "scarce": 6
+          },
+          "count_selected_mode": 11
+        }
+      ]
+    },
+    "budget_consistency_report": {
+      "ok": true,
+      "failures": [],
+      "rows": [
+        {
+          "agent_bucket_id": "Y_ENTRY_SOLO_COST",
+          "buyer_count": 6,
+          "buyer_max_price_range": [
+            900000.0,
+            1450000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "PERIPHERAL_COST_STARTER",
+              "price_range": [
+                500000.0,
+                1000000.0
+              ],
+              "overlap_width": 100000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+              "price_range": [
+                650000.0,
+                1400000.0
+              ],
+              "overlap_width": 500000.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_SCHOOL",
+          "buyer_count": 8,
+          "buyer_max_price_range": [
+            1500000.0,
+            2200000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "SUBCORE_GENERAL_SCHOOL_STARTER",
+              "price_range": [
+                900000.0,
+                1800000.0
+              ],
+              "overlap_width": 300000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "CORE_STRONG_SCHOOL_STARTER",
+              "price_range": [
+                2500000.0,
+                4200000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": false
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_NONSCHOOL",
+          "buyer_count": 6,
+          "buyer_max_price_range": [
+            1300000.0,
+            2000000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+              "price_range": [
+                650000.0,
+                1400000.0
+              ],
+              "overlap_width": 100000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "PERIPHERAL_COST_STARTER",
+              "price_range": [
+                500000.0,
+                1000000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_SCHOOL",
+          "buyer_count": 6,
+          "buyer_max_price_range": [
+            5200000.0,
+            7000000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "CORE_STRONG_SCHOOL_IMPROVE",
+              "price_range": [
+                4500000.0,
+                6800000.0
+              ],
+              "overlap_width": 1600000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+              "price_range": [
+                2200000.0,
+                4200000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_COMFORT",
+          "buyer_count": 6,
+          "buyer_max_price_range": [
+            4200000.0,
+            5800000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 1400000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+              "price_range": [
+                2200000.0,
+                4200000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "MID_DUALCARE_BALANCED",
+          "buyer_count": 5,
+          "buyer_max_price_range": [
+            3800000.0,
+            5600000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+              "price_range": [
+                2200000.0,
+                4200000.0
+              ],
+              "overlap_width": 400000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 1800000.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "MULTI_CHILD_EXPAND",
+          "buyer_count": 4,
+          "buyer_max_price_range": [
+            2800000.0,
+            4500000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "PERIPHERAL_MULTI_CHILD_LARGE",
+              "price_range": [
+                1800000.0,
+                3600000.0
+              ],
+              "overlap_width": 800000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+              "price_range": [
+                2200000.0,
+                4200000.0
+              ],
+              "overlap_width": 1400000.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "HOUSEHOLD_SPLIT_MULTIUNIT",
+          "buyer_count": 4,
+          "buyer_max_price_range": [
+            1200000.0,
+            2200000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+              "price_range": [
+                650000.0,
+                1400000.0
+              ],
+              "overlap_width": 200000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "PERIPHERAL_COST_STARTER",
+              "price_range": [
+                500000.0,
+                1000000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "SILVER_COMFORT_HEALTH",
+          "buyer_count": 4,
+          "buyer_max_price_range": [
+            3400000.0,
+            6200000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "SENIOR_FRIENDLY_COMFORT",
+              "price_range": [
+                3000000.0,
+                5600000.0
+              ],
+              "overlap_width": 2200000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 2000000.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "HNW_CORE_PRESERVATION",
+          "buyer_count": 3,
+          "buyer_max_price_range": [
+            13000000.0,
+            22000000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "CORE_LUXURY_PRESERVATION",
+              "price_range": [
+                12000000.0,
+                24000000.0
+              ],
+              "overlap_width": 9000000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "HNW_PRIVATE_EDU",
+          "buyer_count": 2,
+          "buyer_max_price_range": [
+            12000000.0,
+            20000000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "CORE_LUXURY_PRESERVATION",
+              "price_range": [
+                12000000.0,
+                24000000.0
+              ],
+              "overlap_width": 8000000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        },
+        {
+          "agent_bucket_id": "ASSET_REALLOCATOR",
+          "buyer_count": 3,
+          "buyer_max_price_range": [
+            4000000.0,
+            10000000.0
+          ],
+          "eligible_supply": [
+            {
+              "property_bucket_id": "CORE_LUXURY_PRESERVATION",
+              "price_range": [
+                12000000.0,
+                24000000.0
+              ],
+              "overlap_width": 0.0,
+              "affordable_any_supply": false
+            },
+            {
+              "property_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+              "price_range": [
+                3600000.0,
+                5600000.0
+              ],
+              "overlap_width": 1600000.0,
+              "affordable_any_supply": true
+            },
+            {
+              "property_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+              "price_range": [
+                2200000.0,
+                4200000.0
+              ],
+              "overlap_width": 200000.0,
+              "affordable_any_supply": true
+            }
+          ],
+          "overlap_positive": true,
+          "affordable_any_positive": true
+        }
+      ]
+    },
+    "competition_control_report": {
+      "abundant": [
+        {
+          "agent_bucket_id": "Y_ENTRY_SOLO_COST",
+          "buyer_count": 6,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.2857
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_SCHOOL",
+          "buyer_count": 8,
+          "eligible_supply_count": 19,
+          "buyer_to_supply_ratio": 0.4211
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_NONSCHOOL",
+          "buyer_count": 6,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.2857
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_SCHOOL",
+          "buyer_count": 6,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.2857
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_COMFORT",
+          "buyer_count": 6,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.2857
+        },
+        {
+          "agent_bucket_id": "MID_DUALCARE_BALANCED",
+          "buyer_count": 5,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.2381
+        },
+        {
+          "agent_bucket_id": "MULTI_CHILD_EXPAND",
+          "buyer_count": 4,
+          "eligible_supply_count": 17,
+          "buyer_to_supply_ratio": 0.2353
+        },
+        {
+          "agent_bucket_id": "HOUSEHOLD_SPLIT_MULTIUNIT",
+          "buyer_count": 4,
+          "eligible_supply_count": 21,
+          "buyer_to_supply_ratio": 0.1905
+        },
+        {
+          "agent_bucket_id": "SILVER_COMFORT_HEALTH",
+          "buyer_count": 4,
+          "eligible_supply_count": 19,
+          "buyer_to_supply_ratio": 0.2105
+        },
+        {
+          "agent_bucket_id": "HNW_CORE_PRESERVATION",
+          "buyer_count": 3,
+          "eligible_supply_count": 15,
+          "buyer_to_supply_ratio": 0.2
+        },
+        {
+          "agent_bucket_id": "HNW_PRIVATE_EDU",
+          "buyer_count": 2,
+          "eligible_supply_count": 15,
+          "buyer_to_supply_ratio": 0.1333
+        },
+        {
+          "agent_bucket_id": "ASSET_REALLOCATOR",
+          "buyer_count": 3,
+          "eligible_supply_count": 24,
+          "buyer_to_supply_ratio": 0.125
+        }
+      ],
+      "scarce": [
+        {
+          "agent_bucket_id": "Y_ENTRY_SOLO_COST",
+          "buyer_count": 6,
+          "eligible_supply_count": 10,
+          "buyer_to_supply_ratio": 0.6
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_SCHOOL",
+          "buyer_count": 8,
+          "eligible_supply_count": 8,
+          "buyer_to_supply_ratio": 1.0
+        },
+        {
+          "agent_bucket_id": "Y_ENTRY_FAMILY_NONSCHOOL",
+          "buyer_count": 6,
+          "eligible_supply_count": 10,
+          "buyer_to_supply_ratio": 0.6
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_SCHOOL",
+          "buyer_count": 6,
+          "eligible_supply_count": 7,
+          "buyer_to_supply_ratio": 0.8571
+        },
+        {
+          "agent_bucket_id": "UPGRADE_YOUNG_COMFORT",
+          "buyer_count": 6,
+          "eligible_supply_count": 8,
+          "buyer_to_supply_ratio": 0.75
+        },
+        {
+          "agent_bucket_id": "MID_DUALCARE_BALANCED",
+          "buyer_count": 5,
+          "eligible_supply_count": 8,
+          "buyer_to_supply_ratio": 0.625
+        },
+        {
+          "agent_bucket_id": "MULTI_CHILD_EXPAND",
+          "buyer_count": 4,
+          "eligible_supply_count": 6,
+          "buyer_to_supply_ratio": 0.6667
+        },
+        {
+          "agent_bucket_id": "HOUSEHOLD_SPLIT_MULTIUNIT",
+          "buyer_count": 4,
+          "eligible_supply_count": 10,
+          "buyer_to_supply_ratio": 0.4
+        },
+        {
+          "agent_bucket_id": "SILVER_COMFORT_HEALTH",
+          "buyer_count": 4,
+          "eligible_supply_count": 7,
+          "buyer_to_supply_ratio": 0.5714
+        },
+        {
+          "agent_bucket_id": "HNW_CORE_PRESERVATION",
+          "buyer_count": 3,
+          "eligible_supply_count": 7,
+          "buyer_to_supply_ratio": 0.4286
+        },
+        {
+          "agent_bucket_id": "HNW_PRIVATE_EDU",
+          "buyer_count": 2,
+          "eligible_supply_count": 7,
+          "buyer_to_supply_ratio": 0.2857
+        },
+        {
+          "agent_bucket_id": "ASSET_REALLOCATOR",
+          "buyer_count": 3,
+          "eligible_supply_count": 10,
+          "buyer_to_supply_ratio": 0.3
+        }
+      ]
+    },
+    "runtime_parent_bucket_report": {
+      "ok": true,
+      "missing_refs": [],
+      "parent_bucket_count": 6,
+      "rows": [
+        {
+          "parent_bucket_id": "ENTRY_NONSCHOOL_PARENT",
+          "child_demand_bucket_count": 3,
+          "child_supply_bucket_count": 2,
+          "child_demand_buckets": [
+            "Y_ENTRY_SOLO_COST",
+            "Y_ENTRY_FAMILY_NONSCHOOL",
+            "HOUSEHOLD_SPLIT_MULTIUNIT"
+          ],
+          "child_supply_buckets": [
+            "SUBCORE_NONSCHOOL_STARTER",
+            "PERIPHERAL_COST_STARTER"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        },
+        {
+          "parent_bucket_id": "ENTRY_SCHOOL_PARENT",
+          "child_demand_bucket_count": 1,
+          "child_supply_bucket_count": 2,
+          "child_demand_buckets": [
+            "Y_ENTRY_FAMILY_SCHOOL"
+          ],
+          "child_supply_buckets": [
+            "SUBCORE_GENERAL_SCHOOL_STARTER",
+            "CORE_STRONG_SCHOOL_STARTER"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        },
+        {
+          "parent_bucket_id": "HNW_PARENT",
+          "child_demand_bucket_count": 2,
+          "child_supply_bucket_count": 3,
+          "child_demand_buckets": [
+            "HNW_CORE_PRESERVATION",
+            "HNW_PRIVATE_EDU"
+          ],
+          "child_supply_buckets": [
+            "CORE_LUXURY_PRESERVATION",
+            "CORE_STRONG_SCHOOL_IMPROVE",
+            "CORE_NONSCHOOL_IMPROVE"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        },
+        {
+          "parent_bucket_id": "REALLOCATOR_PARENT",
+          "child_demand_bucket_count": 1,
+          "child_supply_bucket_count": 4,
+          "child_demand_buckets": [
+            "ASSET_REALLOCATOR"
+          ],
+          "child_supply_buckets": [
+            "CORE_LUXURY_PRESERVATION",
+            "CORE_NONSCHOOL_IMPROVE",
+            "SUBCORE_IMPROVE_FAMILY",
+            "SENIOR_FRIENDLY_COMFORT"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        },
+        {
+          "parent_bucket_id": "SENIOR_PARENT",
+          "child_demand_bucket_count": 1,
+          "child_supply_bucket_count": 1,
+          "child_demand_buckets": [
+            "SILVER_COMFORT_HEALTH"
+          ],
+          "child_supply_buckets": [
+            "SENIOR_FRIENDLY_COMFORT"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        },
+        {
+          "parent_bucket_id": "UPGRADE_PARENT",
+          "child_demand_bucket_count": 4,
+          "child_supply_bucket_count": 4,
+          "child_demand_buckets": [
+            "UPGRADE_YOUNG_SCHOOL",
+            "UPGRADE_YOUNG_COMFORT",
+            "MID_DUALCARE_BALANCED",
+            "MULTI_CHILD_EXPAND"
+          ],
+          "child_supply_buckets": [
+            "CORE_STRONG_SCHOOL_IMPROVE",
+            "CORE_NONSCHOOL_IMPROVE",
+            "SUBCORE_IMPROVE_FAMILY",
+            "PERIPHERAL_MULTI_CHILD_LARGE"
+          ],
+          "missing_child_demand_buckets": [],
+          "missing_child_supply_buckets": []
+        }
+      ]
+    },
+    "compatibility_graph_summary": {
+      "demand_to_supply_edge_count": 31,
+      "supply_to_demand_edge_count": 26
+    },
+    "reverse_coverage_report": {
+      "ok": true,
+      "experiment_mode": "abundant",
+      "uncovered_primary_supply_buckets": [],
+      "rows": [
+        {
+          "supply_bucket_id": "CORE_LUXURY_PRESERVATION",
+          "count_selected_mode": 3,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 2,
+          "secondary_demand_bucket_count": 1,
+          "primary_demand_agent_count": 5,
+          "primary_demand_buckets": [
+            "HNW_CORE_PRESERVATION",
+            "HNW_PRIVATE_EDU"
+          ],
+          "secondary_demand_buckets": [
+            "ASSET_REALLOCATOR"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "CORE_NONSCHOOL_IMPROVE",
+          "count_selected_mode": 12,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 3,
+          "secondary_demand_bucket_count": 1,
+          "primary_demand_agent_count": 14,
+          "primary_demand_buckets": [
+            "ASSET_REALLOCATOR",
+            "MID_DUALCARE_BALANCED",
+            "UPGRADE_YOUNG_COMFORT"
+          ],
+          "secondary_demand_buckets": [
+            "SILVER_COMFORT_HEALTH"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "CORE_STRONG_SCHOOL_IMPROVE",
+          "count_selected_mode": 12,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 1,
+          "secondary_demand_bucket_count": 1,
+          "primary_demand_agent_count": 6,
+          "primary_demand_buckets": [
+            "UPGRADE_YOUNG_SCHOOL"
+          ],
+          "secondary_demand_buckets": [
+            "UPGRADE_YOUNG_COMFORT"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "CORE_STRONG_SCHOOL_STARTER",
+          "count_selected_mode": 8,
+          "reverse_primary_required": false,
+          "primary_demand_bucket_count": 0,
+          "secondary_demand_bucket_count": 1,
+          "primary_demand_agent_count": 0,
+          "primary_demand_buckets": [],
+          "secondary_demand_buckets": [
+            "Y_ENTRY_FAMILY_SCHOOL"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "PERIPHERAL_COST_STARTER",
+          "count_selected_mode": 10,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 3,
+          "secondary_demand_bucket_count": 0,
+          "primary_demand_agent_count": 16,
+          "primary_demand_buckets": [
+            "HOUSEHOLD_SPLIT_MULTIUNIT",
+            "Y_ENTRY_FAMILY_NONSCHOOL",
+            "Y_ENTRY_SOLO_COST"
+          ],
+          "secondary_demand_buckets": [],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "PERIPHERAL_MULTI_CHILD_LARGE",
+          "count_selected_mode": 8,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 1,
+          "secondary_demand_bucket_count": 0,
+          "primary_demand_agent_count": 4,
+          "primary_demand_buckets": [
+            "MULTI_CHILD_EXPAND"
+          ],
+          "secondary_demand_buckets": [],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "SENIOR_FRIENDLY_COMFORT",
+          "count_selected_mode": 7,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 1,
+          "secondary_demand_bucket_count": 1,
+          "primary_demand_agent_count": 4,
+          "primary_demand_buckets": [
+            "SILVER_COMFORT_HEALTH"
+          ],
+          "secondary_demand_buckets": [
+            "ASSET_REALLOCATOR"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "SUBCORE_GENERAL_SCHOOL_STARTER",
+          "count_selected_mode": 11,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 1,
+          "secondary_demand_bucket_count": 2,
+          "primary_demand_agent_count": 8,
+          "primary_demand_buckets": [
+            "Y_ENTRY_FAMILY_SCHOOL"
+          ],
+          "secondary_demand_buckets": [
+            "HOUSEHOLD_SPLIT_MULTIUNIT",
+            "Y_ENTRY_SOLO_COST"
+          ],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "SUBCORE_IMPROVE_FAMILY",
+          "count_selected_mode": 9,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 4,
+          "secondary_demand_bucket_count": 0,
+          "primary_demand_agent_count": 18,
+          "primary_demand_buckets": [
+            "ASSET_REALLOCATOR",
+            "MID_DUALCARE_BALANCED",
+            "MULTI_CHILD_EXPAND",
+            "UPGRADE_YOUNG_COMFORT"
+          ],
+          "secondary_demand_buckets": [],
+          "reverse_covered": true
+        },
+        {
+          "supply_bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+          "count_selected_mode": 11,
+          "reverse_primary_required": true,
+          "primary_demand_bucket_count": 3,
+          "secondary_demand_bucket_count": 0,
+          "primary_demand_agent_count": 16,
+          "primary_demand_buckets": [
+            "HOUSEHOLD_SPLIT_MULTIUNIT",
+            "Y_ENTRY_FAMILY_NONSCHOOL",
+            "Y_ENTRY_SOLO_COST"
+          ],
+          "secondary_demand_buckets": [],
+          "reverse_covered": true
+        }
+      ]
+    },
+    "graph_consistency_report": {
+      "ok": true,
+      "demand_edge_count": 31,
+      "supply_edge_count": 26,
+      "missing_primary_supply_buckets": [],
+      "missing_primary_demand_buckets": [],
+      "invalid_edges": [],
+      "missing_reverse_edges": [],
+      "missing_forward_edges": [],
+      "unaffordable_primary_edges": []
+    }
+  },
+  "supply_buckets": [
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "CORE_LUXURY_PRESERVATION",
+      "tier": "luxury",
+      "zone": "A",
+      "is_school_district": 0,
+      "property_type_bucket": "LUXURY",
+      "product_segment": "luxury",
+      "household_fit": "small_family_fit",
+      "value_logic": "scarcity",
+      "transaction_liquidity_band": "low",
+      "reverse_primary_required": 0,
+      "price_low": 12000000.0,
+      "price_high": 24000000.0,
+      "bedroom_low": 4,
+      "bedroom_high": 6,
+      "building_area_low": 160.0,
+      "building_area_high": 260.0,
+      "quality_low": 4.0,
+      "quality_high": 5.0,
+      "count_abundant_base": 3,
+      "count_scarce_base": 2,
+      "count_selected_mode": 3
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "CORE_NONSCHOOL_IMPROVE",
+      "tier": "improve",
+      "zone": "A",
+      "is_school_district": 0,
+      "property_type_bucket": "IMPROVE",
+      "product_segment": "improve",
+      "household_fit": "small_family_fit",
+      "value_logic": "self_use_comfort",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 3600000.0,
+      "price_high": 5600000.0,
+      "bedroom_low": 2,
+      "bedroom_high": 4,
+      "building_area_low": 85.0,
+      "building_area_high": 125.0,
+      "quality_low": 2.0,
+      "quality_high": 3.0,
+      "count_abundant_base": 12,
+      "count_scarce_base": 5,
+      "count_selected_mode": 12
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "CORE_STRONG_SCHOOL_IMPROVE",
+      "tier": "improve",
+      "zone": "A",
+      "is_school_district": 1,
+      "property_type_bucket": "IMPROVE",
+      "product_segment": "improve",
+      "household_fit": "three_person_fit",
+      "value_logic": "preservation",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 4500000.0,
+      "price_high": 6800000.0,
+      "bedroom_low": 3,
+      "bedroom_high": 4,
+      "building_area_low": 95.0,
+      "building_area_high": 135.0,
+      "quality_low": 2.0,
+      "quality_high": 3.0,
+      "count_abundant_base": 12,
+      "count_scarce_base": 4,
+      "count_selected_mode": 12
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "CORE_STRONG_SCHOOL_STARTER",
+      "tier": "starter",
+      "zone": "A",
+      "is_school_district": 1,
+      "property_type_bucket": "JUST",
+      "product_segment": "starter",
+      "household_fit": "three_person_fit",
+      "value_logic": "preservation",
+      "transaction_liquidity_band": "high",
+      "reverse_primary_required": 0,
+      "price_low": 2500000.0,
+      "price_high": 4200000.0,
+      "bedroom_low": 2,
+      "bedroom_high": 3,
+      "building_area_low": 70.0,
+      "building_area_high": 95.0,
+      "quality_low": 2.0,
+      "quality_high": 3.0,
+      "count_abundant_base": 8,
+      "count_scarce_base": 3,
+      "count_selected_mode": 8
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "PERIPHERAL_COST_STARTER",
+      "tier": "starter",
+      "zone": "B",
+      "is_school_district": 0,
+      "property_type_bucket": "JUST",
+      "product_segment": "starter",
+      "household_fit": "solo_fit",
+      "value_logic": "cost_effective",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 500000.0,
+      "price_high": 1000000.0,
+      "bedroom_low": 1,
+      "bedroom_high": 2,
+      "building_area_low": 45.0,
+      "building_area_high": 70.0,
+      "quality_low": 1.0,
+      "quality_high": 2.0,
+      "count_abundant_base": 10,
+      "count_scarce_base": 4,
+      "count_selected_mode": 10
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "PERIPHERAL_MULTI_CHILD_LARGE",
+      "tier": "improve",
+      "zone": "B",
+      "is_school_district": 0,
+      "property_type_bucket": "IMPROVE",
+      "product_segment": "starter_upgrade",
+      "household_fit": "multi_child_fit",
+      "value_logic": "self_use_comfort",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 1800000.0,
+      "price_high": 3600000.0,
+      "bedroom_low": 4,
+      "bedroom_high": 5,
+      "building_area_low": 120.0,
+      "building_area_high": 170.0,
+      "quality_low": 2.0,
+      "quality_high": 3.0,
+      "count_abundant_base": 8,
+      "count_scarce_base": 3,
+      "count_selected_mode": 8
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "SENIOR_FRIENDLY_COMFORT",
+      "tier": "improve",
+      "zone": "A",
+      "is_school_district": 0,
+      "property_type_bucket": "IMPROVE",
+      "product_segment": "senior_friendly",
+      "household_fit": "eldercare_fit",
+      "value_logic": "self_use_comfort",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 3000000.0,
+      "price_high": 5600000.0,
+      "bedroom_low": 2,
+      "bedroom_high": 3,
+      "building_area_low": 85.0,
+      "building_area_high": 120.0,
+      "quality_low": 3.0,
+      "quality_high": 4.0,
+      "count_abundant_base": 7,
+      "count_scarce_base": 2,
+      "count_selected_mode": 7
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "tier": "starter",
+      "zone": "B",
+      "is_school_district": 1,
+      "property_type_bucket": "JUST",
+      "product_segment": "starter",
+      "household_fit": "three_person_fit",
+      "value_logic": "cost_effective",
+      "transaction_liquidity_band": "high",
+      "reverse_primary_required": 0,
+      "price_low": 900000.0,
+      "price_high": 1800000.0,
+      "bedroom_low": 2,
+      "bedroom_high": 3,
+      "building_area_low": 70.0,
+      "building_area_high": 95.0,
+      "quality_low": 1.0,
+      "quality_high": 2.0,
+      "count_abundant_base": 11,
+      "count_scarce_base": 5,
+      "count_selected_mode": 11
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "SUBCORE_IMPROVE_FAMILY",
+      "tier": "improve",
+      "zone": "B",
+      "is_school_district": 1,
+      "property_type_bucket": "IMPROVE",
+      "product_segment": "improve",
+      "household_fit": "three_person_fit",
+      "value_logic": "self_use_comfort",
+      "transaction_liquidity_band": "medium",
+      "reverse_primary_required": 0,
+      "price_low": 2200000.0,
+      "price_high": 4200000.0,
+      "bedroom_low": 3,
+      "bedroom_high": 4,
+      "building_area_low": 95.0,
+      "building_area_high": 130.0,
+      "quality_low": 2.0,
+      "quality_high": 3.0,
+      "count_abundant_base": 9,
+      "count_scarce_base": 3,
+      "count_selected_mode": 9
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "bucket_id": "SUBCORE_NONSCHOOL_STARTER",
+      "tier": "starter",
+      "zone": "B",
+      "is_school_district": 0,
+      "property_type_bucket": "JUST",
+      "product_segment": "starter",
+      "household_fit": "solo_fit",
+      "value_logic": "cost_effective",
+      "transaction_liquidity_band": "high",
+      "reverse_primary_required": 0,
+      "price_low": 650000.0,
+      "price_high": 1400000.0,
+      "bedroom_low": 1,
+      "bedroom_high": 2,
+      "building_area_low": 50.0,
+      "building_area_high": 80.0,
+      "quality_low": 1.0,
+      "quality_high": 2.0,
+      "count_abundant_base": 11,
+      "count_scarce_base": 6,
+      "count_selected_mode": 11
+    }
+  ],
+  "demand_coverage": [
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "ASSET_REALLOCATOR",
+      "role_side": "buyer_seller",
+      "buyer_count": 3,
+      "agent_type": "smart",
+      "info_delay_months": 0,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "IMPROVE",
+      "target_buy_price_low": 3000000.0,
+      "target_buy_price_high": 8000000.0,
+      "buyer_max_price_low": 4000000.0,
+      "buyer_max_price_high": 10000000.0,
+      "primary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "secondary_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|SENIOR_FRIENDLY_COMFORT",
+      "eligible_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "affordable_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 24,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.125,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "HNW_CORE_PRESERVATION",
+      "role_side": "buyer",
+      "buyer_count": 3,
+      "agent_type": "smart",
+      "info_delay_months": 0,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "LUXURY",
+      "target_buy_price_low": 10000000.0,
+      "target_buy_price_high": 18000000.0,
+      "buyer_max_price_low": 13000000.0,
+      "buyer_max_price_high": 22000000.0,
+      "primary_supply_bucket_ids": "CORE_LUXURY_PRESERVATION",
+      "secondary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE",
+      "eligible_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|CORE_NONSCHOOL_IMPROVE",
+      "affordable_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|CORE_NONSCHOOL_IMPROVE",
+      "primary_selected_supply_count": 3,
+      "eligible_selected_supply_count": 15,
+      "affordable_selected_supply_count": 15,
+      "competition_ratio": 0.2,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "HNW_PRIVATE_EDU",
+      "role_side": "buyer",
+      "buyer_count": 2,
+      "agent_type": "smart",
+      "info_delay_months": 0,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "LUXURY",
+      "target_buy_price_low": 9000000.0,
+      "target_buy_price_high": 16000000.0,
+      "buyer_max_price_low": 12000000.0,
+      "buyer_max_price_high": 20000000.0,
+      "primary_supply_bucket_ids": "CORE_LUXURY_PRESERVATION",
+      "secondary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE",
+      "eligible_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|CORE_NONSCHOOL_IMPROVE",
+      "affordable_supply_bucket_ids": "CORE_LUXURY_PRESERVATION|CORE_NONSCHOOL_IMPROVE",
+      "primary_selected_supply_count": 3,
+      "eligible_selected_supply_count": 15,
+      "affordable_selected_supply_count": 15,
+      "competition_ratio": 0.1333,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "HOUSEHOLD_SPLIT_MULTIUNIT",
+      "role_side": "buyer",
+      "buyer_count": 4,
+      "agent_type": "normal",
+      "info_delay_months": 1,
+      "target_zone": "B",
+      "need_school_district": 0,
+      "property_type_target": "STARTER",
+      "target_buy_price_low": 900000.0,
+      "target_buy_price_high": 1500000.0,
+      "buyer_max_price_low": 1200000.0,
+      "buyer_max_price_high": 2200000.0,
+      "primary_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "secondary_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "eligible_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "affordable_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.1905,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "MID_DUALCARE_BALANCED",
+      "role_side": "buyer",
+      "buyer_count": 5,
+      "agent_type": "normal",
+      "info_delay_months": 1,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "IMPROVE",
+      "target_buy_price_low": 3200000.0,
+      "target_buy_price_high": 4800000.0,
+      "buyer_max_price_low": 3800000.0,
+      "buyer_max_price_high": 5600000.0,
+      "primary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "secondary_supply_bucket_ids": "",
+      "eligible_supply_bucket_ids": "SUBCORE_IMPROVE_FAMILY|CORE_NONSCHOOL_IMPROVE",
+      "affordable_supply_bucket_ids": "SUBCORE_IMPROVE_FAMILY|CORE_NONSCHOOL_IMPROVE",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.2381,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "MULTI_CHILD_EXPAND",
+      "role_side": "buyer",
+      "buyer_count": 4,
+      "agent_type": "normal",
+      "info_delay_months": 1,
+      "target_zone": "B",
+      "need_school_district": 0,
+      "property_type_target": "IMPROVE",
+      "target_buy_price_low": 2200000.0,
+      "target_buy_price_high": 3800000.0,
+      "buyer_max_price_low": 2800000.0,
+      "buyer_max_price_high": 4500000.0,
+      "primary_supply_bucket_ids": "PERIPHERAL_MULTI_CHILD_LARGE|SUBCORE_IMPROVE_FAMILY",
+      "secondary_supply_bucket_ids": "",
+      "eligible_supply_bucket_ids": "PERIPHERAL_MULTI_CHILD_LARGE|SUBCORE_IMPROVE_FAMILY",
+      "affordable_supply_bucket_ids": "PERIPHERAL_MULTI_CHILD_LARGE|SUBCORE_IMPROVE_FAMILY",
+      "primary_selected_supply_count": 17,
+      "eligible_selected_supply_count": 17,
+      "affordable_selected_supply_count": 17,
+      "competition_ratio": 0.2353,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "SILVER_COMFORT_HEALTH",
+      "role_side": "buyer",
+      "buyer_count": 4,
+      "agent_type": "normal",
+      "info_delay_months": 1,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "SENIOR_FRIENDLY",
+      "target_buy_price_low": 2800000.0,
+      "target_buy_price_high": 5200000.0,
+      "buyer_max_price_low": 3400000.0,
+      "buyer_max_price_high": 6200000.0,
+      "primary_supply_bucket_ids": "SENIOR_FRIENDLY_COMFORT",
+      "secondary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE",
+      "eligible_supply_bucket_ids": "SENIOR_FRIENDLY_COMFORT|CORE_NONSCHOOL_IMPROVE",
+      "affordable_supply_bucket_ids": "SENIOR_FRIENDLY_COMFORT|CORE_NONSCHOOL_IMPROVE",
+      "primary_selected_supply_count": 7,
+      "eligible_selected_supply_count": 19,
+      "affordable_selected_supply_count": 19,
+      "competition_ratio": 0.2105,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "UPGRADE_YOUNG_COMFORT",
+      "role_side": "buyer",
+      "buyer_count": 6,
+      "agent_type": "normal",
+      "info_delay_months": 0,
+      "target_zone": "A",
+      "need_school_district": 0,
+      "property_type_target": "IMPROVE",
+      "target_buy_price_low": 3600000.0,
+      "target_buy_price_high": 5200000.0,
+      "buyer_max_price_low": 4200000.0,
+      "buyer_max_price_high": 5800000.0,
+      "primary_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "secondary_supply_bucket_ids": "CORE_STRONG_SCHOOL_IMPROVE",
+      "eligible_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "affordable_supply_bucket_ids": "CORE_NONSCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.2857,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "UPGRADE_YOUNG_SCHOOL",
+      "role_side": "buyer",
+      "buyer_count": 6,
+      "agent_type": "normal",
+      "info_delay_months": 0,
+      "target_zone": "A",
+      "need_school_district": 1,
+      "property_type_target": "IMPROVE",
+      "target_buy_price_low": 4500000.0,
+      "target_buy_price_high": 6200000.0,
+      "buyer_max_price_low": 5200000.0,
+      "buyer_max_price_high": 7000000.0,
+      "primary_supply_bucket_ids": "CORE_STRONG_SCHOOL_IMPROVE",
+      "secondary_supply_bucket_ids": "SUBCORE_IMPROVE_FAMILY",
+      "eligible_supply_bucket_ids": "CORE_STRONG_SCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "affordable_supply_bucket_ids": "CORE_STRONG_SCHOOL_IMPROVE|SUBCORE_IMPROVE_FAMILY",
+      "primary_selected_supply_count": 12,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.2857,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "Y_ENTRY_FAMILY_NONSCHOOL",
+      "role_side": "buyer",
+      "buyer_count": 6,
+      "agent_type": "normal",
+      "info_delay_months": 0,
+      "target_zone": "B",
+      "need_school_district": 0,
+      "property_type_target": "STARTER_UPGRADE",
+      "target_buy_price_low": 1000000.0,
+      "target_buy_price_high": 1600000.0,
+      "buyer_max_price_low": 1300000.0,
+      "buyer_max_price_high": 2000000.0,
+      "primary_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "secondary_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "eligible_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "affordable_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.2857,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "Y_ENTRY_FAMILY_SCHOOL",
+      "role_side": "buyer",
+      "buyer_count": 8,
+      "agent_type": "normal",
+      "info_delay_months": 0,
+      "target_zone": "B",
+      "need_school_district": 1,
+      "property_type_target": "STARTER_UPGRADE",
+      "target_buy_price_low": 1200000.0,
+      "target_buy_price_high": 1800000.0,
+      "buyer_max_price_low": 1500000.0,
+      "buyer_max_price_high": 2200000.0,
+      "primary_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "secondary_supply_bucket_ids": "CORE_STRONG_SCHOOL_STARTER|SUBCORE_IMPROVE_FAMILY",
+      "eligible_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER|CORE_STRONG_SCHOOL_STARTER",
+      "affordable_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "primary_selected_supply_count": 11,
+      "eligible_selected_supply_count": 19,
+      "affordable_selected_supply_count": 11,
+      "competition_ratio": 0.4211,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    },
+    {
+      "snapshot_id": "spindle_medium",
+      "demand_bucket_id": "Y_ENTRY_SOLO_COST",
+      "role_side": "buyer",
+      "buyer_count": 6,
+      "agent_type": "normal",
+      "info_delay_months": 0,
+      "target_zone": "B",
+      "need_school_district": 0,
+      "property_type_target": "STARTER",
+      "target_buy_price_low": 700000.0,
+      "target_buy_price_high": 1200000.0,
+      "buyer_max_price_low": 900000.0,
+      "buyer_max_price_high": 1450000.0,
+      "primary_supply_bucket_ids": "SUBCORE_NONSCHOOL_STARTER|PERIPHERAL_COST_STARTER",
+      "secondary_supply_bucket_ids": "SUBCORE_GENERAL_SCHOOL_STARTER",
+      "eligible_supply_bucket_ids": "PERIPHERAL_COST_STARTER|SUBCORE_NONSCHOOL_STARTER",
+      "affordable_supply_bucket_ids": "PERIPHERAL_COST_STARTER|SUBCORE_NONSCHOOL_STARTER",
+      "primary_selected_supply_count": 21,
+      "eligible_selected_supply_count": 21,
+      "affordable_selected_supply_count": 21,
+      "competition_ratio": 0.2857,
+      "coverage_status": "ok",
+      "coverage_reason": ""
+    }
+  ]
+}

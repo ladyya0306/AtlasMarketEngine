@@ -35,6 +35,319 @@ def _stable_prompt_json(payload) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _read_bool_config(config, key: str, default: bool) -> bool:
+    try:
+        raw = config.get(key, default) if config is not None else default
+    except Exception:
+        raw = default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _read_int_config(config, key: str, default: int) -> int:
+    try:
+        raw = config.get(key, default) if config is not None else default
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _read_float_config(config, key: str, default: float) -> float:
+    try:
+        raw = config.get(key, default) if config is not None else default
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def _resolve_buyer_match_visible_shortlist_cap(config=None, configured_top_k: int = 5) -> int:
+    """
+    Cap the LLM-visible shortlist to a small set so that buyer selection stays
+    focused and prompt cost remains predictable.
+    """
+    default_cap = max(3, min(5, int(configured_top_k or 5)))
+    try:
+        raw_cap = (
+            config.get(
+                "smart_agent.buyer_match_visible_shortlist_cap",
+                config.get("buyer_match_visible_shortlist_cap", default_cap),
+            )
+            if config
+            else default_cap
+        )
+        cap = int(raw_cap)
+    except Exception:
+        cap = default_cap
+    return max(3, min(5, int(cap)))
+
+
+def _compute_shortlist_overlap_ratio(previous_ids, current_ids) -> float:
+    previous = {int(x) for x in (previous_ids or []) if x is not None}
+    current = {int(x) for x in (current_ids or []) if x is not None}
+    if not previous or not current:
+        return 0.0
+    union = previous | current
+    if not union:
+        return 0.0
+    return float(len(previous & current)) / float(len(union))
+
+
+def _resolve_hot_listing_auto_bidding_mode(
+    listing: Dict,
+    buyer_count: int,
+    config=None,
+) -> Optional[str]:
+    """
+    Process-layer override only: when a listing is clearly hot, route the session
+    into a more competitive negotiation format. This never chooses a winner.
+    """
+    if int(buyer_count or 0) < 2:
+        return None
+    enabled = _read_bool_config(
+        config,
+        "smart_agent.hot_listing_auto_bidding_enabled",
+        True,
+    )
+    if not enabled:
+        return None
+    fake_hot_block_auction_enabled = _read_bool_config(
+        config,
+        "smart_agent.fake_hot_block_auction_enabled",
+        True,
+    )
+    min_buyers = max(
+        2,
+        min(8, _read_int_config(config, "smart_agent.hot_listing_auto_bidding_min_buyers", 3)),
+    )
+    min_recent_competitions = max(
+        2,
+        min(
+            24,
+            _read_int_config(
+                config,
+                "smart_agent.hot_listing_auto_bidding_min_recent_competitions",
+                _read_int_config(config, "smart_agent.hot_listing_auto_bidding_min_recent_matches", 8),
+            ),
+        ),
+    )
+    min_heat_score = max(
+        0.10,
+        min(1.0, _read_float_config(config, "smart_agent.hot_listing_auto_bidding_min_heat_score", 0.60)),
+    )
+    mode = str(
+        config.get("smart_agent.hot_listing_auto_bidding_mode", "BATCH")
+        if config is not None
+        else "BATCH"
+    ).strip().upper()
+    if mode not in {"BATCH", "CLASSIC"}:
+        mode = "BATCH"
+
+    is_fake_hot = bool(
+        listing.get("_fake_hot_historical", False)
+        or listing.get("_same_month_fake_hot", False)
+        or listing.get("_is_fake_hot", False)
+    )
+    recent_competitions = int(
+        listing.get("_recent_competition_count", listing.get("_recent_match_count", 0)) or 0
+    )
+    recent_commitments = int(listing.get("_recent_commitment_count", 0) or 0)
+    hot_score = float(
+        listing.get("_real_competition_score", listing.get("_hot_listing_score", 0.0)) or 0.0
+    )
+    current_interest = max(int(buyer_count or 0), int(listing.get("_current_interest_count", 0) or 0))
+    if is_fake_hot and fake_hot_block_auction_enabled:
+        return None
+
+    force_auction_enabled = _read_bool_config(
+        config,
+        "smart_agent.true_competition_force_auction_enabled",
+        True,
+    )
+    force_mode = str(
+        config.get("smart_agent.true_competition_force_auction_mode", mode)
+        if config is not None
+        else mode
+    ).strip().upper()
+    if force_mode not in {"BATCH", "CLASSIC"}:
+        force_mode = mode
+    force_min_buyers = max(
+        2,
+        min(8, _read_int_config(config, "smart_agent.true_competition_force_auction_min_buyers", 2)),
+    )
+    force_min_commitments = max(
+        1,
+        min(8, _read_int_config(config, "smart_agent.true_competition_force_auction_min_commitments", 2)),
+    )
+    force_min_competitions = max(
+        1,
+        min(12, _read_int_config(config, "smart_agent.true_competition_force_auction_min_competitions", 2)),
+    )
+    if current_interest < min_buyers:
+        return None
+    if (
+        force_auction_enabled
+        and current_interest >= force_min_buyers
+        and recent_commitments >= force_min_commitments
+        and recent_competitions >= force_min_competitions
+    ):
+        return force_mode
+    if recent_competitions >= min_recent_competitions or hot_score >= min_heat_score:
+        return mode
+    return None
+
+
+def _resolve_batch_tie_break_route(
+    finalists: List[Dict],
+    seller: Agent,
+    listing: Dict,
+    config=None,
+) -> Dict[str, object]:
+    """
+    Gray-zone routing for near-equal tie-break only. This never replaces the
+    seller's ultimate LLM choice; it only chooses fast vs smart model.
+    """
+    if not finalists:
+        return {"model": "fast", "gray_score": 0.0, "reason": "no_finalists"}
+    enabled = _read_bool_config(
+        config,
+        "smart_agent.batch_tie_break_dual_routing_enabled",
+        True,
+    )
+    if not enabled:
+        return {"model": "smart", "gray_score": 1.0, "reason": "dual_routing_disabled"}
+
+    prices = [float(x.get("price", 0.0) or 0.0) for x in finalists]
+    top_price = max(prices) if prices else 0.0
+    low_price = min(prices) if prices else 0.0
+    relative_span = 0.0 if top_price <= 0 else max(0.0, min(1.0, (top_price - low_price) / top_price / 0.02))
+    smart_buyer_ratio = (
+        sum(1 for x in finalists if str(getattr(x.get("buyer"), "agent_type", "normal")).lower() == "smart")
+        / max(1, len(finalists))
+    )
+    seller_smart = 1.0 if str(getattr(seller, "agent_type", "normal")).lower() == "smart" else 0.0
+    finalist_count_factor = min(1.0, max(0.0, (len(finalists) - 1) / 3.0))
+    hot_score = min(
+        1.0,
+        max(
+            0.0,
+            float(listing.get("_real_competition_score", listing.get("_hot_listing_score", 0.0)) or 0.0),
+        ),
+    )
+    current_interest = int(listing.get("_current_interest_count", 0) or 0)
+    interest_factor = min(1.0, max(0.0, (current_interest - 1) / 5.0))
+
+    gray_score = (
+        0.26 * (1.0 - relative_span)
+        + 0.22 * smart_buyer_ratio
+        + 0.16 * seller_smart
+        + 0.18 * finalist_count_factor
+        + 0.10 * hot_score
+        + 0.08 * interest_factor
+    )
+    threshold = max(
+        0.10,
+        min(0.95, _read_float_config(config, "smart_agent.batch_tie_break_gray_score_threshold", 0.50)),
+    )
+    if gray_score >= threshold:
+        return {
+            "model": "smart",
+            "gray_score": float(gray_score),
+            "reason": f"gray_zone score={gray_score:.3f} threshold={threshold:.3f}",
+        }
+    return {
+        "model": "fast",
+        "gray_score": float(gray_score),
+        "reason": f"clear_case score={gray_score:.3f} threshold={threshold:.3f}",
+    }
+
+
+def _maybe_reuse_same_month_stop_signal(
+    buyer: Agent,
+    current_match_month: int,
+    retry_attempt: int,
+    full_shortlist_ids: List[int],
+    visible_shortlist_ids: List[int],
+    strategy_profile: str,
+    market_trend: str,
+    crowd_mode: str,
+    config=None,
+) -> Optional[Dict[str, object]]:
+    """
+    Reuse a same-month explicit LLM stop decision when the current shortlist is
+    materially the same as the one the buyer already rejected this month.
+    This preserves the original LLM choice instead of re-asking the same
+    question with near-identical inputs.
+    """
+    if int(retry_attempt or 0) <= 0:
+        return None
+    if int(current_match_month or -1) <= 0:
+        return None
+
+    last_ctx = dict(getattr(buyer, "_last_buyer_match_context", {}) or {})
+    if not last_ctx:
+        return None
+    if int(last_ctx.get("matching_month", -1) or -1) != int(current_match_month):
+        return None
+    if not bool(last_ctx.get("llm_called", False)):
+        return None
+    if not bool(last_ctx.get("stop_search_this_month", False)):
+        return None
+    if last_ctx.get("selected_property_id") is not None:
+        return None
+
+    previous_shortlist_ids = list(
+        last_ctx.get("shortlist_property_ids", [])
+        or last_ctx.get("shortlist_visible_property_ids", [])
+        or []
+    )
+    overlap_ratio = _compute_shortlist_overlap_ratio(previous_shortlist_ids, full_shortlist_ids)
+    try:
+        raw_threshold = (
+            config.get(
+                "smart_agent.same_month_stop_reuse_overlap_threshold",
+                config.get("same_month_stop_reuse_overlap_threshold", 0.60),
+            )
+            if config
+            else 0.60
+        )
+        overlap_threshold = float(raw_threshold)
+    except Exception:
+        overlap_threshold = 0.60
+    overlap_threshold = max(0.20, min(0.95, float(overlap_threshold)))
+    if overlap_ratio < overlap_threshold:
+        return None
+
+    reused_ctx = dict(last_ctx)
+    tags = list(reused_ctx.get("selection_reason_tags", []) or [])
+    if "route:same_month_stop_reuse" not in tags:
+        tags.append("route:same_month_stop_reuse")
+    reused_ctx.update(
+        {
+            "matching_month": int(current_match_month),
+            "strategy_profile": str(strategy_profile),
+            "market_trend": str(market_trend),
+            "crowd_mode": str(crowd_mode),
+            "retry_attempt": int(retry_attempt),
+            "shortlist_property_ids": [int(x) for x in full_shortlist_ids],
+            "shortlist_visible_property_ids": [int(x) for x in visible_shortlist_ids],
+            "shortlist_full_size": int(len(full_shortlist_ids)),
+            "shortlist_visible_size": int(len(visible_shortlist_ids)),
+            "selected_property_id": None,
+            "selected_in_shortlist": False,
+            "llm_monthly_intent": "STOP",
+            "stop_search_this_month": True,
+            "selection_reason_tags": tags,
+            "llm_route_model": "reuse",
+            "llm_route_reason": f"same_month_stop_reuse overlap={overlap_ratio:.3f}",
+            "llm_called": False,
+            "same_month_stop_reused": True,
+            "same_month_stop_reuse_overlap": float(overlap_ratio),
+        }
+    )
+    return reused_ctx
+
+
 def build_macro_context(month: int, config=None) -> str:
     """Builds macro-economic context string."""
     # This might need to be imported or reconstructed if agent_behavior usage causes circular import.
@@ -50,7 +363,16 @@ def build_macro_context(month: int, config=None) -> str:
         risk_free_rate = config.market.get('risk_free_rate', 0.03)
         ltv = config.mortgage.get('max_ltv', 0.7)
 
-    return f"【宏观环境】无风险利率: {risk_free_rate * 100:.1f}%, 首付比例: {(1 - ltv) * 100:.0f}%"
+    try:
+        current_month = max(1, int(month))
+    except Exception:
+        current_month = 1
+
+    return (
+        f"【宏观环境·第{current_month}回合（虚拟周期）】"
+        f"无风险利率: {risk_free_rate * 100:.1f}%, "
+        f"首付比例: {(1 - ltv) * 100:.0f}%"
+    )
 
 
 def _clamp01(v: float) -> float:
@@ -204,6 +526,7 @@ def _run_batch_tie_break_rebid(
     finalists = _pick_batch_tied_finalists(bids, listing, config)
     if not finalists:
         return bids, []
+    route_info = _resolve_batch_tie_break_route(finalists, seller, listing, config)
     top_price = max(float(e.get("price", 0.0) or 0.0) for e in finalists)
     min_raise = _compute_batch_extra_rebid_increment(top_price, config)
     history = []
@@ -232,7 +555,11 @@ def _run_batch_tie_break_rebid(
 
         输出JSON: {{"bid_price": float, "reason": "..."}}
         """
-        resp = safe_call_llm(prompt, {"bid_price": 0, "reason": "Hold current tied bid"}, model_type="fast")
+        resp = safe_call_llm(
+            prompt,
+            {"bid_price": 0, "reason": "Hold current tied bid"},
+            model_type=str(route_info.get("model", "fast") or "fast"),
+        )
         raw_bid = normalize_llm_price_scale(float(resp.get("bid_price", 0) or 0.0), float(top_price), float(max_budget))
         if raw_bid > 0:
             clamped = clamp_offer_price(raw_bid, float(listing.get("listed_price", top_price) or top_price), float(max_budget), config=config)
@@ -250,6 +577,8 @@ def _run_batch_tie_break_rebid(
                         "action": "TIE_BREAK_FINAL_BID",
                         "price": float(final_bid),
                         "content": str(resp.get("reason", "") or ""),
+                        "model": str(route_info.get("model", "fast") or "fast"),
+                        "gray_score": float(route_info.get("gray_score", 0.0) or 0.0),
                         "llm_called": 1,
                     }
                 )
@@ -266,6 +595,7 @@ async def _run_batch_tie_break_rebid_async(
     finalists = _pick_batch_tied_finalists(bids, listing, config)
     if not finalists:
         return bids, []
+    route_info = _resolve_batch_tie_break_route(finalists, seller, listing, config)
     top_price = max(float(e.get("price", 0.0) or 0.0) for e in finalists)
     min_raise = _compute_batch_extra_rebid_increment(top_price, config)
     finalist_ids = {int(getattr(e.get("buyer"), "id", -1)) for e in finalists}
@@ -291,7 +621,11 @@ async def _run_batch_tie_break_rebid_async(
 
         输出JSON: {{"bid_price": float, "reason": "..."}}
         """
-        resp = await safe_call_llm_async(prompt, {"bid_price": 0, "reason": "Hold current tied bid"}, model_type="fast")
+        resp = await safe_call_llm_async(
+            prompt,
+            {"bid_price": 0, "reason": "Hold current tied bid"},
+            model_type=str(route_info.get("model", "fast") or "fast"),
+        )
         raw_bid = normalize_llm_price_scale(float(resp.get("bid_price", 0) or 0.0), float(top_price), float(max_budget))
         out = dict(entry)
         out["_tie_break_reason"] = str(resp.get("reason", "") or "")
@@ -329,6 +663,8 @@ async def _run_batch_tie_break_rebid_async(
                     "action": "TIE_BREAK_FINAL_BID",
                     "price": float(entry.get("price", 0.0) or 0.0),
                     "content": str(entry.pop("_tie_break_reason", "") or ""),
+                    "model": str(route_info.get("model", "fast") or "fast"),
+                    "gray_score": float(route_info.get("gray_score", 0.0) or 0.0),
                     "llm_called": 1,
                 }
             )
@@ -349,6 +685,7 @@ def _resolve_batch_bid_winner(bids: List[Dict], seller: Agent, listing: Dict, co
     finalists = [b for b in ranked if abs(float(b.get("price", 0.0) or 0.0) - top_price) <= tie_gap]
     if len(finalists) <= 1:
         return ranked[0], []
+    route_info = _resolve_batch_tie_break_route(finalists, seller, listing, config)
 
     candidate_rows = []
     for entry in finalists:
@@ -381,7 +718,7 @@ def _resolve_batch_bid_winner(bids: List[Dict], seller: Agent, listing: Dict, co
     resp = safe_call_llm(
         prompt,
         {"buyer_id": int(getattr(fallback["buyer"], "id", -1)), "reason": "Fallback near-equal batch tie-break"},
-        model_type="fast",
+        model_type=str(route_info.get("model", "fast") or "fast"),
     )
     try:
         chosen_id = int(resp.get("buyer_id"))
@@ -397,6 +734,8 @@ def _resolve_batch_bid_winner(bids: List[Dict], seller: Agent, listing: Dict, co
         "buyer": int(getattr(selected["buyer"], "id", -1)),
         "buyer_id": int(getattr(selected["buyer"], "id", -1)),
         "content": str(resp.get("reason", "") or "Near-equal batch tie-break"),
+        "model": str(route_info.get("model", "fast") or "fast"),
+        "gray_score": float(route_info.get("gray_score", 0.0) or 0.0),
         "llm_called": 1,
     }
     return selected, [history_event]
@@ -413,6 +752,7 @@ async def _resolve_batch_bid_winner_async(bids: List[Dict], seller: Agent, listi
     finalists = [b for b in ranked if abs(float(b.get("price", 0.0) or 0.0) - top_price) <= tie_gap]
     if len(finalists) <= 1:
         return ranked[0], []
+    route_info = _resolve_batch_tie_break_route(finalists, seller, listing, config)
 
     candidate_rows = []
     for entry in finalists:
@@ -445,7 +785,7 @@ async def _resolve_batch_bid_winner_async(bids: List[Dict], seller: Agent, listi
     resp = await safe_call_llm_async(
         prompt,
         {"buyer_id": int(getattr(fallback["buyer"], "id", -1)), "reason": "Fallback near-equal batch tie-break"},
-        model_type="fast",
+        model_type=str(route_info.get("model", "fast") or "fast"),
     )
     try:
         chosen_id = int(resp.get("buyer_id"))
@@ -461,6 +801,8 @@ async def _resolve_batch_bid_winner_async(bids: List[Dict], seller: Agent, listi
         "buyer": int(getattr(selected["buyer"], "id", -1)),
         "buyer_id": int(getattr(selected["buyer"], "id", -1)),
         "content": str(resp.get("reason", "") or "Near-equal batch tie-break"),
+        "model": str(route_info.get("model", "fast") or "fast"),
+        "gray_score": float(route_info.get("gray_score", 0.0) or 0.0),
         "llm_called": 1,
     }
     return selected, [history_event]
@@ -1009,19 +1351,58 @@ async def run_batch_bidding_async(seller: Agent, buyers: List[Agent], listing: D
         cursor = db_conn.cursor()
         for bid_result in results:
             try:
-                cursor.execute("""
-                    INSERT INTO property_buyer_matches
-                    (month, property_id, buyer_id, listing_price, buyer_bid, is_valid_bid, proceeded_to_negotiation)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    month,
-                    listing['property_id'],
-                    bid_result['buyer'].id,
-                    listing['listed_price'],
-                    bid_result['original_bid'],
-                    1 if bid_result['is_valid'] else 0,
-                    1 if bid_result['price'] > 0 else 0
-                ))
+                existing_match = cursor.execute(
+                    """
+                    SELECT match_id
+                    FROM property_buyer_matches
+                    WHERE month=? AND property_id=? AND buyer_id=?
+                    ORDER BY match_id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        int(month),
+                        int(listing["property_id"]),
+                        int(bid_result["buyer"].id),
+                    ),
+                ).fetchone()
+                if existing_match and existing_match[0] is not None:
+                    cursor.execute(
+                        """
+                        UPDATE property_buyer_matches
+                        SET listing_price=CASE
+                                WHEN listing_price IS NULL OR listing_price=0 THEN ?
+                                ELSE listing_price
+                            END,
+                            buyer_bid=?,
+                            is_valid_bid=MAX(COALESCE(is_valid_bid, 0), ?),
+                            proceeded_to_negotiation=MAX(COALESCE(proceeded_to_negotiation, 0), ?)
+                        WHERE match_id=?
+                        """,
+                        (
+                            float(listing["listed_price"]),
+                            float(bid_result.get("original_bid", 0.0) or 0.0),
+                            1 if bid_result["is_valid"] else 0,
+                            1 if bid_result["price"] > 0 else 0,
+                            int(existing_match[0]),
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO property_buyer_matches
+                        (month, property_id, buyer_id, listing_price, buyer_bid, is_valid_bid, proceeded_to_negotiation)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            month,
+                            listing["property_id"],
+                            bid_result["buyer"].id,
+                            listing["listed_price"],
+                            bid_result["original_bid"],
+                            1 if bid_result["is_valid"] else 0,
+                            1 if bid_result["price"] > 0 else 0,
+                        ),
+                    )
             except Exception as e:
                 logger.error(f"Failed to record bid for buyer {bid_result['buyer'].id}: {e}")
         db_conn.commit()
@@ -1570,7 +1951,14 @@ def run_flash_deal(seller: Agent, buyer: Agent, listing: Dict, market: Market) -
     return {"outcome": "failed", "reason": "Buyer rejected flash deal"}
 
 
-def run_negotiation_session(seller: Agent, buyers: List[Agent], listing: Dict, market: Market, config=None) -> Dict:
+def run_negotiation_session(
+    seller: Agent,
+    buyers: List[Agent],
+    listing: Dict,
+    market: Market,
+    config=None,
+    month: int = 1,
+) -> Dict:
     """Main Entry Point for Negotiation Phase"""
     if not buyers:
         return {"outcome": "failed", "reason": "No valid buyers"}
@@ -1591,7 +1979,7 @@ def run_negotiation_session(seller: Agent, buyers: List[Agent], listing: Dict, m
     else:  # CLASSIC
         # Iterate buyers until one succeeds or all fail
         for buyer in buyers:
-            result = negotiate(buyer, seller, listing, market, len(buyers), config)
+            result = negotiate(buyer, seller, listing, market, len(buyers), config, month=month)
             if result['outcome'] == 'success':
                 result['buyer_id'] = buyer.id
                 result['mode'] = 'classic'
@@ -1633,6 +2021,21 @@ async def run_negotiation_session_async(seller: Agent, buyers: List[Agent], list
         mode = "BATCH"
     elif classic_competitive_enabled and classic_competitive_force_mode and len(buyers) > 1:
         mode = "CLASSIC"
+    else:
+        hot_listing_auto_mode = _resolve_hot_listing_auto_bidding_mode(listing, len(buyers), config)
+        if hot_listing_auto_mode and len(buyers) > 1:
+            if hot_listing_auto_mode == "CLASSIC" and not classic_competitive_enabled:
+                mode = "BATCH"
+                route_info = dict(route_info)
+                route_info["reason"] = (
+                    f"{route_info.get('reason', '')}; hot_listing_auto_bidding=CLASSIC->BATCH"
+                ).strip("; ")
+            else:
+                mode = str(hot_listing_auto_mode)
+                route_info = dict(route_info)
+                route_info["reason"] = (
+                    f"{route_info.get('reason', '')}; hot_listing_auto_bidding={hot_listing_auto_mode}"
+                ).strip("; ")
 
     # Simple Async Implementation: Support Classic Mode primarily for now
     # (Batch and Flash can be added later or reuse sync logic if no LLM calls inside those specific functions yet,
@@ -1675,6 +2078,7 @@ async def run_negotiation_session_async(seller: Agent, buyers: List[Agent], list
                     buyers=buyers,
                     listing=listing,
                     market=market,
+                    month=month,
                     config=config,
                     llm_model_type=route_info["model"],
                 )
@@ -1689,6 +2093,7 @@ async def run_negotiation_session_async(seller: Agent, buyers: List[Agent], list
                         market,
                         len(buyers),
                         config,
+                        month=month,
                         llm_model_type=route_info["model"],
                     )
                     fallback_log.extend(classic_result.get("history", []))
@@ -1766,6 +2171,7 @@ async def run_negotiation_session_async(seller: Agent, buyers: List[Agent], list
                 buyers=buyers,
                 listing=listing,
                 market=market,
+                month=month,
                 config=config,
                 llm_model_type=route_info["model"],
             )
@@ -1789,6 +2195,7 @@ async def run_negotiation_session_async(seller: Agent, buyers: List[Agent], list
                 market,
                 len(buyers),
                 config,
+                month=month,
                 llm_model_type=route_info["model"],
             )
             consolidated_log.extend(result.get('history', []))
@@ -2663,6 +3070,37 @@ def _derive_property_type_bucket(prop: Dict) -> str:
     return "IMPROVE" if area >= 110.0 else "JUST"
 
 
+def _candidate_area_band(prop: Dict) -> str:
+    area = float(prop.get("building_area", 0.0) or 0.0)
+    if area <= 90.0:
+        return "SMALL"
+    if area <= 120.0:
+        return "MEDIUM"
+    if area <= 160.0:
+        return "LARGE"
+    return "XL"
+
+
+def _normalize_counterfactual_reason_tag(raw: object) -> str:
+    text = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    alias_map = {
+        "too_expensive": "too_expensive",
+        "price_too_high": "too_expensive",
+        "budget_stretch": "too_expensive",
+        "no_school": "no_school",
+        "school_mismatch": "no_school",
+        "wrong_zone": "wrong_zone",
+        "zone_mismatch": "wrong_zone",
+        "too_large": "size_too_large",
+        "size_too_large": "size_too_large",
+        "too_small": "size_too_small",
+        "size_too_small": "size_too_small",
+        "inferior_same_cluster": "inferior_same_cluster",
+        "cluster_inferior": "inferior_same_cluster",
+    }
+    return alias_map.get(text, "")
+
+
 def _derive_five_factor_contract(
     buyer: Agent,
     pref,
@@ -2823,6 +3261,104 @@ def build_candidate_shortlist(
         int(x) for x in (getattr(agent, "_historical_seen_property_ids", []) or [])
         if x is not None
     } if agent is not None else set()
+    heat_meta_map = dict(getattr(agent, "_candidate_heat_meta_map", {}) or {}) if agent is not None else {}
+    quota_used_map = dict(getattr(agent, "_candidate_monthly_quota_used_map", {}) or {}) if agent is not None else {}
+    commitment_map = (
+        dict(getattr(agent, "_candidate_monthly_commitment_map", {}) or {}) if agent is not None else {}
+    )
+    fake_hot_circuit_enabled = _read_bool_config(
+        config,
+        "smart_agent.candidate_fake_hot_circuit_enabled",
+        True,
+    )
+    fake_hot_historical_match_threshold = max(
+        3,
+        min(40, _read_int_config(config, "smart_agent.candidate_fake_hot_historical_match_threshold", 10)),
+    )
+    fake_hot_negotiation_ratio_threshold = max(
+        0.0,
+        min(1.0, _read_float_config(config, "smart_agent.candidate_fake_hot_negotiation_ratio_threshold", 0.20)),
+    )
+    fake_hot_commitment_ratio_threshold = max(
+        0.0,
+        min(
+            1.0,
+            _read_float_config(
+                config,
+                "smart_agent.candidate_fake_hot_commitment_ratio_threshold",
+                fake_hot_negotiation_ratio_threshold,
+            ),
+        ),
+    )
+    fake_hot_same_month_quota_threshold = max(
+        2,
+        min(20, _read_int_config(config, "smart_agent.candidate_fake_hot_same_month_quota_threshold", 4)),
+    )
+    fake_hot_same_month_commitment_threshold = max(
+        1,
+        min(
+            12,
+            _read_int_config(
+                config,
+                "smart_agent.candidate_fake_hot_same_month_commitment_threshold",
+                2,
+            ),
+        ),
+    )
+    fake_hot_score_penalty = max(
+        0.0,
+        min(1.0, _read_float_config(config, "smart_agent.candidate_fake_hot_score_penalty", 0.28)),
+    )
+    sibling_rotation_bonus = max(
+        0.0,
+        min(0.6, _read_float_config(config, "smart_agent.candidate_sibling_rotation_bonus", 0.14)),
+    )
+    true_competition_sibling_bonus = max(
+        0.0,
+        min(0.5, _read_float_config(config, "smart_agent.candidate_true_competition_sibling_bonus", 0.10)),
+    )
+    true_competition_spillover_min_score = max(
+        0.1,
+        min(1.0, _read_float_config(config, "smart_agent.candidate_true_competition_spillover_min_score", 0.45)),
+    )
+    fake_hot_pool_preserve_min = max(
+        1,
+        min(12, _read_int_config(config, "smart_agent.candidate_fake_hot_pool_preserve_min", 3)),
+    )
+    candidate_two_stage_enabled = _read_bool_config(
+        config,
+        "smart_agent.candidate_two_stage_enabled",
+        True,
+    )
+    candidate_two_stage_min_stage1_pool = max(
+        2,
+        min(16, _read_int_config(config, "smart_agent.candidate_two_stage_min_stage1_pool", 4)),
+    )
+    candidate_two_stage_max_stage2_fill = max(
+        0,
+        min(12, _read_int_config(config, "smart_agent.candidate_two_stage_max_stage2_fill", 6)),
+    )
+    candidate_diversity_cluster_cap = max(
+        1,
+        min(4, _read_int_config(config, "smart_agent.candidate_diversity_cluster_cap", 2)),
+    )
+    counterfactual_feedback_enabled = _read_bool_config(
+        config,
+        "smart_agent.candidate_counterfactual_feedback_enabled",
+        True,
+    )
+    counterfactual_reject_penalty = max(
+        0.0,
+        min(0.8, _read_float_config(config, "smart_agent.candidate_counterfactual_reject_penalty", 0.28)),
+    )
+    counterfactual_same_cluster_penalty = max(
+        0.0,
+        min(0.6, _read_float_config(config, "smart_agent.candidate_counterfactual_same_cluster_penalty", 0.12)),
+    )
+    counterfactual_reason_penalty = max(
+        0.0,
+        min(0.6, _read_float_config(config, "smart_agent.candidate_counterfactual_reason_penalty", 0.08)),
+    )
 
     def _price_band(listing: Dict) -> str:
         listed_price = float(listing.get("listed_price", 0.0) or 0.0)
@@ -2834,11 +3370,228 @@ def build_candidate_shortlist(
             return "MID"
         return "HIGH"
 
+    def _diversity_cluster_key(listing: Dict, prop: Dict) -> str:
+        zone_bucket = str(prop.get("zone", "") or "").upper() or "UNK"
+        school_bucket = "SCHOOL" if bool(prop.get("is_school_district", False)) else "NOSCHOOL"
+        type_bucket = _derive_property_type_bucket(prop)
+        area_bucket = _candidate_area_band(prop)
+        price_bucket = _price_band(listing)
+        return f"{zone_bucket}:{school_bucket}:{type_bucket}:{area_bucket}:{price_bucket}"
+
+    last_ctx = dict(getattr(agent, "_last_buyer_match_context", {}) or {}) if agent is not None else {}
+    explicit_reject_ids: Set[int] = set()
+    rejected_feedback_map: Dict[int, Dict[str, object]] = {}
+    rejected_cluster_feedback: Dict[str, List[Dict[str, object]]] = {}
+    if counterfactual_feedback_enabled and last_ctx:
+        for entry in list(last_ctx.get("rejected_property_feedback", []) or [])[:6]:
+            try:
+                rejected_pid = int(entry.get("property_id"))
+            except Exception:
+                continue
+            rejected_prop = properties_map.get(rejected_pid, {}) or {}
+            if not rejected_prop:
+                continue
+            feedback_listed_price = float(entry.get("listed_price", 0.0) or 0.0)
+            feedback_prop = dict(rejected_prop)
+            feedback_prop["building_area"] = float(
+                entry.get("building_area", rejected_prop.get("building_area", 0.0)) or 0.0
+            )
+            feedback_prop["zone"] = str(entry.get("zone", rejected_prop.get("zone", "")) or "")
+            feedback_prop["is_school_district"] = bool(
+                entry.get("is_school_district", rejected_prop.get("is_school_district", False))
+            )
+            feedback = {
+                "property_id": rejected_pid,
+                "reason": str(entry.get("reason", "") or ""),
+                "reason_tag": _normalize_counterfactual_reason_tag(entry.get("reason_tag")),
+                "listed_price": feedback_listed_price,
+                "building_area": float(feedback_prop.get("building_area", 0.0) or 0.0),
+                "zone": str(feedback_prop.get("zone", "") or ""),
+                "is_school_district": bool(feedback_prop.get("is_school_district", False)),
+                # Always recompute with the current cluster definition so that
+                # older stored feedback remains compatible after bucket refactors.
+                "cluster_key": _diversity_cluster_key(
+                    {"property_id": rejected_pid, "listed_price": feedback_listed_price},
+                    feedback_prop,
+                ),
+            }
+            explicit_reject_ids.add(rejected_pid)
+            rejected_feedback_map[rejected_pid] = feedback
+            rejected_cluster_feedback.setdefault(str(feedback["cluster_key"]), []).append(feedback)
+
+    def _persist_pool_stats(
+        *,
+        selected_rows: List[Dict],
+        ranked_size: int,
+        stage1_pool_size: int,
+        blocked_fake_hot_count: int,
+        stage2_fill_size: int,
+    ) -> List[Dict]:
+        if agent is not None:
+            setattr(
+                agent,
+                "_last_candidate_pool_stats",
+                {
+                    "fake_hot_circuit_enabled": bool(fake_hot_circuit_enabled),
+                    "fake_hot_blocked_pool_count": int(blocked_fake_hot_count),
+                    "ranked_candidate_count": int(ranked_size),
+                    "stage1_pool_size": int(stage1_pool_size),
+                    "stage2_fill_size": int(stage2_fill_size),
+                    "candidate_two_stage_enabled": bool(candidate_two_stage_enabled),
+                    "candidate_two_stage_min_stage1_pool": int(candidate_two_stage_min_stage1_pool),
+                    "candidate_two_stage_max_stage2_fill": int(candidate_two_stage_max_stage2_fill),
+                    "selected_size": int(len(selected_rows or [])),
+                },
+            )
+        return selected_rows
+
+    def _candidate_heat_state(listing: Dict) -> Dict[str, object]:
+        pid = int(listing.get("property_id", -1))
+        meta = dict(heat_meta_map.get(pid, {}) or {})
+        recent_exposure_count = int(
+            meta.get("recent_exposure_count", meta.get("recent_match_count", 0)) or 0
+        )
+        recent_commitment_count = int(meta.get("recent_commitment_count", 0) or 0)
+        recent_competition_count = int(meta.get("recent_competition_count", 0) or 0)
+        recent_negotiations = int(meta.get("recent_negotiation_count", 0) or 0)
+        recent_transactions = int(meta.get("recent_transaction_count", 0) or 0)
+        if recent_exposure_count > 0:
+            recent_commitment_ratio = float(
+                meta.get(
+                    "recent_commitment_ratio",
+                    recent_commitment_count / max(1, recent_exposure_count),
+                )
+                or 0.0
+            )
+            recent_neg_ratio = float(
+                meta.get(
+                    "recent_negotiation_ratio",
+                    recent_negotiations / max(1, recent_exposure_count),
+                )
+                or 0.0
+            )
+        else:
+            recent_commitment_ratio = 0.0
+            recent_neg_ratio = 0.0
+        same_month_quota_used = int(quota_used_map.get(pid, 0) or 0)
+        same_month_commitment_count = int(commitment_map.get(pid, 0) or 0)
+        historical_fake_hot = bool(
+            meta.get("fake_hot_historical", False)
+            or (
+                recent_exposure_count >= fake_hot_historical_match_threshold
+                and recent_commitment_ratio <= fake_hot_commitment_ratio_threshold
+                and recent_neg_ratio <= fake_hot_negotiation_ratio_threshold
+                and recent_transactions <= 0
+            )
+        )
+        same_month_fake_hot = bool(
+            same_month_commitment_count >= fake_hot_same_month_commitment_threshold
+            or same_month_quota_used >= fake_hot_same_month_quota_threshold
+        )
+        hot_listing_score = float(meta.get("hot_listing_score", 0.0) or 0.0)
+        real_competition_score = float(meta.get("real_competition_score", hot_listing_score) or hot_listing_score)
+        return {
+            "recent_match_count": int(recent_exposure_count),
+            "recent_exposure_count": int(recent_exposure_count),
+            "recent_commitment_count": int(recent_commitment_count),
+            "recent_competition_count": int(recent_competition_count),
+            "recent_negotiation_count": int(recent_negotiations),
+            "recent_transaction_count": int(recent_transactions),
+            "recent_commitment_ratio": float(recent_commitment_ratio),
+            "recent_negotiation_ratio": float(recent_neg_ratio),
+            "same_month_quota_used": int(same_month_quota_used),
+            "same_month_commitment_count": int(same_month_commitment_count),
+            "historical_fake_hot": bool(historical_fake_hot),
+            "same_month_fake_hot": bool(same_month_fake_hot),
+            "is_fake_hot": bool(historical_fake_hot or same_month_fake_hot),
+            "hot_listing_score": float(hot_listing_score),
+            "real_competition_score": float(real_competition_score),
+        }
+
+    spillover_context = dict(getattr(agent, "substitute_spillover_context", {}) or {}) if agent is not None else {}
+    spillover_month = int(getattr(agent, "substitute_spillover_month", -1) or -1) if agent is not None else -1
+    current_matching_month = int(getattr(agent, "_current_matching_month", -1) or -1) if agent is not None else -1
+
+    def _candidate_spillover_bonus(listing: Dict, prop: Dict) -> Tuple[float, Dict[str, object]]:
+        if not spillover_context:
+            return 0.0, {"enabled": False}
+        if spillover_month < 0:
+            return 0.0, {"enabled": False}
+        if current_matching_month > 0 and spillover_month != current_matching_month:
+            return 0.0, {"enabled": False, "stale": True}
+        try:
+            pid = int(listing.get("property_id", -1) or -1)
+        except Exception:
+            pid = -1
+        source_pid = int(spillover_context.get("source_property_id", -1) or -1)
+        if pid <= 0 or pid == source_pid:
+            return 0.0, {"enabled": False, "same_source": True}
+
+        zone = str(prop.get("zone", listing.get("zone", "")) or "").upper()
+        is_school = bool(prop.get("is_school_district", listing.get("is_school_district", False)))
+        property_type = str(prop.get("property_type", "") or "").upper() or "UNK"
+        try:
+            area = float(prop.get("building_area", 0.0) or 0.0)
+        except Exception:
+            area = 0.0
+        try:
+            listed_price = float(listing.get("listed_price", listing.get("price", 0.0)) or 0.0)
+        except Exception:
+            listed_price = 0.0
+
+        similarity = 0.0
+        reasons: List[str] = []
+        if zone and zone == str(spillover_context.get("zone", "") or "").upper():
+            similarity += 0.28
+            reasons.append("same_zone")
+        if bool(is_school) == bool(spillover_context.get("is_school_district", False)):
+            similarity += 0.18
+            reasons.append("same_school_flag")
+        if property_type == str(spillover_context.get("property_type", "") or "").upper():
+            similarity += 0.18
+            reasons.append("same_property_type")
+
+        if area > 0.0:
+            if _candidate_area_band(prop) == str(spillover_context.get("area_band", "UNK") or "UNK"):
+                similarity += 0.16
+                reasons.append("same_area_band")
+            else:
+                similarity += 0.06
+                reasons.append("near_area_band")
+        if listed_price > 0.0:
+            if _price_band(listing) == str(spillover_context.get("price_band", "UNK") or "UNK"):
+                similarity += 0.12
+                reasons.append("same_price_band")
+            source_price = float(spillover_context.get("listed_price", 0.0) or 0.0)
+            if source_price > 0.0:
+                gap_ratio = abs(listed_price - source_price) / max(source_price, 1.0)
+                if gap_ratio <= 0.10:
+                    similarity += 0.16
+                    reasons.append("near_price")
+                elif gap_ratio <= 0.20:
+                    similarity += 0.08
+                    reasons.append("mid_price")
+        similarity = max(0.0, min(1.0, float(similarity)))
+        if similarity <= 0.0:
+            return 0.0, {"enabled": True, "similarity": 0.0, "reasons": reasons}
+
+        priority_weight = max(0.0, min(1.5, float(spillover_context.get("priority_weight", 0.0) or 0.0)))
+        competition_strength = max(1.0, float(spillover_context.get("competition_strength", 1.0) or 1.0))
+        competition_factor = min(1.0, competition_strength / 2.0)
+        bonus = float(similarity * priority_weight * competition_factor)
+        return max(0.0, min(1.25, bonus)), {
+            "enabled": True,
+            "similarity": float(round(similarity, 4)),
+            "priority_weight": float(round(priority_weight, 4)),
+            "competition_factor": float(round(competition_factor, 4)),
+            "source_property_id": int(source_pid),
+            "reasons": reasons,
+        }
+
     def _diversity_key(listing: Dict) -> str:
         pid = int(listing.get("property_id", -1))
         prop = properties_map.get(pid, {})
-        zone = str(prop.get("zone", "")).upper() or "UNK"
-        return f"{zone}:{_price_band(listing)}"
+        return _diversity_cluster_key(listing, prop)
 
     def _zone_of(listing: Dict) -> str:
         pid = int(listing.get("property_id", -1))
@@ -3036,6 +3789,8 @@ def build_candidate_shortlist(
         school_bucket = "SCHOOL" if bool(prop.get("is_school_district", False)) else "NOSCHOOL"
         type_bucket = _derive_property_type_bucket(prop)
         bucket_id = f"{zone_bucket}_{school_bucket}_{type_bucket}"
+        diversity_cluster_key = _diversity_cluster_key(listing, prop)
+        heat_state = _candidate_heat_state(listing)
         raw_score = _strategy_score_candidate(
             listing,
             prop,
@@ -3049,17 +3804,73 @@ def build_candidate_shortlist(
             sum(float(preference_weights.get(k, 0.0)) * float(dim_scores.get(k, 0.0)) for k in preference_weights.keys())
         )
         persona_bonus, _ = _persona_shortlist_adjustment(agent, pref, listing, prop) if agent else (0.0, [])
+        substitute_spillover_bonus, substitute_spillover_meta = _candidate_spillover_bonus(listing, prop)
         crowd_adjust = _crowd_style_adjustment(listing)
         noise = random.uniform(-tiebreak_noise, tiebreak_noise) if tiebreak_noise > 0 else 0.0
+        counterfactual_penalty = 0.0
+        counterfactual_penalty_reasons: List[str] = []
+        if counterfactual_feedback_enabled:
+            if pid in explicit_reject_ids:
+                counterfactual_penalty += float(counterfactual_reject_penalty)
+                counterfactual_penalty_reasons.append("explicit_reject")
+            if diversity_cluster_key in rejected_cluster_feedback:
+                counterfactual_penalty += float(counterfactual_same_cluster_penalty)
+                counterfactual_penalty_reasons.append("same_cluster_reject")
+                tags_in_cluster = {
+                    str(item.get("reason_tag", "") or "")
+                    for item in rejected_cluster_feedback.get(diversity_cluster_key, [])
+                    if str(item.get("reason_tag", "") or "")
+                }
+                listed_price = float(listing.get("listed_price", 0.0) or 0.0)
+                area = float(prop.get("building_area", 0.0) or 0.0)
+                if "too_expensive" in tags_in_cluster:
+                    rejected_prices = [
+                        float(item.get("listed_price", 0.0) or 0.0)
+                        for item in rejected_cluster_feedback.get(diversity_cluster_key, [])
+                        if float(item.get("listed_price", 0.0) or 0.0) > 0.0
+                    ]
+                    if rejected_prices and listed_price >= min(rejected_prices) * 0.97:
+                        counterfactual_penalty += float(counterfactual_reason_penalty)
+                        counterfactual_penalty_reasons.append("reason:too_expensive")
+                if "no_school" in tags_in_cluster and not bool(prop.get("is_school_district", False)):
+                    counterfactual_penalty += float(counterfactual_reason_penalty)
+                    counterfactual_penalty_reasons.append("reason:no_school")
+                if "wrong_zone" in tags_in_cluster:
+                    target_zone = str(getattr(pref, "target_zone", "") or "").upper()
+                    if target_zone and zone_bucket != target_zone:
+                        counterfactual_penalty += float(counterfactual_reason_penalty)
+                        counterfactual_penalty_reasons.append("reason:wrong_zone")
+                if "size_too_large" in tags_in_cluster:
+                    rejected_areas = [
+                        float(item.get("building_area", 0.0) or 0.0)
+                        for item in rejected_cluster_feedback.get(diversity_cluster_key, [])
+                        if float(item.get("building_area", 0.0) or 0.0) > 0.0
+                    ]
+                    if rejected_areas and area >= min(rejected_areas) * 0.95:
+                        counterfactual_penalty += float(counterfactual_reason_penalty)
+                        counterfactual_penalty_reasons.append("reason:size_too_large")
+                if "size_too_small" in tags_in_cluster:
+                    rejected_areas = [
+                        float(item.get("building_area", 0.0) or 0.0)
+                        for item in rejected_cluster_feedback.get(diversity_cluster_key, [])
+                        if float(item.get("building_area", 0.0) or 0.0) > 0.0
+                    ]
+                    if rejected_areas and area <= max(rejected_areas) * 1.05:
+                        counterfactual_penalty += float(counterfactual_reason_penalty)
+                        counterfactual_penalty_reasons.append("reason:size_too_small")
         adjusted_score = (
             float(raw_score) * rule_weight
             + float(weighted_dim_score) * dimension_weight
             + float(persona_bonus)
+            + float(substitute_spillover_bonus)
             + float(crowd_adjust)
             + float(unseen_discovery_bonus)
+            - float(counterfactual_penalty)
             - _pressure_penalty(listing)
             + float(noise)
         )
+        if bool(heat_state.get("is_fake_hot", False)):
+            adjusted_score -= float(fake_hot_score_penalty)
         ranked.append(
             {
                 "score": float(adjusted_score),
@@ -3069,6 +3880,7 @@ def build_candidate_shortlist(
                 "zone": _zone_of(listing),
                 "price_band": _price_band(listing),
                 "bucket_id": bucket_id,
+                "heat_state": heat_state,
             }
         )
         scoring_map[pid] = {
@@ -3077,18 +3889,88 @@ def build_candidate_shortlist(
             "dimension_utility": float(weighted_dim_score),
             "dimension_scores": dim_scores,
             "weights": dict(preference_weights),
+            "substitute_spillover_bonus": round(float(substitute_spillover_bonus), 4),
+            "substitute_spillover_meta": dict(substitute_spillover_meta),
+            "market_spillover_bonus": 0.0,
             "price_band": _price_band(listing),
-            "zone": _zone_of(listing),
+                "zone": _zone_of(listing),
                 "crowd_mode": str(crowd_mode),
                 "crowd_pressure_units": round(float(_pressure_units(listing)), 4),
                 "crowd_adjustment": round(float(crowd_adjust), 4),
                 "historically_unseen": bool(is_historically_unseen),
                 "unseen_discovery_bonus": round(float(unseen_discovery_bonus), 4),
+                "counterfactual_penalty": round(float(counterfactual_penalty), 4),
+                "counterfactual_penalty_reasons": list(dict.fromkeys(counterfactual_penalty_reasons)),
                 "bucket_id": str(bucket_id),
                 "candidate_bucket_key": str(_diversity_key(listing)),
+                "diversity_cluster_key": str(diversity_cluster_key),
+                "heat_state": dict(heat_state),
             }
 
     ranked.sort(key=lambda x: x["score"], reverse=True)
+    if ranked:
+        bucket_heat_groups: Dict[str, List[Dict[str, object]]] = {}
+        for item in ranked:
+            bucket_heat_groups.setdefault(str(item.get("bucket_id", "UNK_NOSCHOOL_JUST")), []).append(item)
+        for bucket_items in bucket_heat_groups.values():
+            has_fake_hot = any(bool((item.get("heat_state") or {}).get("is_fake_hot", False)) for item in bucket_items)
+            has_cool_sibling = any(not bool((item.get("heat_state") or {}).get("is_fake_hot", False)) for item in bucket_items)
+            if has_fake_hot and has_cool_sibling and sibling_rotation_bonus > 0.0:
+                for item in bucket_items:
+                    if not bool((item.get("heat_state") or {}).get("is_fake_hot", False)):
+                        item["score"] = float(item.get("score", 0.0) or 0.0) + float(sibling_rotation_bonus)
+                        try:
+                            sibling_pid = int((item.get("listing") or {}).get("property_id", -1) or -1)
+                        except Exception:
+                            sibling_pid = -1
+                        if sibling_pid > 0:
+                            meta = scoring_map.get(sibling_pid, {})
+                            prev_bonus = float(meta.get("market_spillover_bonus", 0.0) or 0.0)
+                            meta["market_spillover_bonus"] = round(prev_bonus + float(sibling_rotation_bonus), 4)
+                            scoring_map[sibling_pid] = meta
+            anchor_true_heat = max(
+                float((item.get("heat_state") or {}).get("real_competition_score", 0.0) or 0.0)
+                for item in bucket_items
+            )
+            if anchor_true_heat >= float(true_competition_spillover_min_score) and true_competition_sibling_bonus > 0.0:
+                for item in bucket_items:
+                    heat_state = dict(item.get("heat_state", {}) or {})
+                    if bool(heat_state.get("is_fake_hot", False)):
+                        continue
+                    item_true_heat = float(heat_state.get("real_competition_score", 0.0) or 0.0)
+                    if item_true_heat >= anchor_true_heat - 0.02:
+                        continue
+                    cooling_headroom = max(0.0, anchor_true_heat - item_true_heat)
+                    spillover_bonus = float(true_competition_sibling_bonus * min(1.0, cooling_headroom / 0.35))
+                    if spillover_bonus <= 0.0:
+                        continue
+                    item["score"] = float(item.get("score", 0.0) or 0.0) + spillover_bonus
+                    try:
+                        sibling_pid = int((item.get("listing") or {}).get("property_id", -1) or -1)
+                    except Exception:
+                        sibling_pid = -1
+                    if sibling_pid > 0:
+                        meta = scoring_map.get(sibling_pid, {})
+                        prev_bonus = float(meta.get("market_spillover_bonus", 0.0) or 0.0)
+                        meta["market_spillover_bonus"] = round(prev_bonus + spillover_bonus, 4)
+                        meta["market_spillover_anchor_heat"] = round(float(anchor_true_heat), 4)
+                        scoring_map[sibling_pid] = meta
+            bucket_items.sort(
+                key=lambda item: (
+                    1 if bool((item.get("heat_state") or {}).get("is_fake_hot", False)) and has_cool_sibling else 0,
+                    -float(item.get("score", 0.0) or 0.0),
+                )
+            )
+        ranked = [
+            item
+            for _bucket_id, items in sorted(
+                bucket_heat_groups.items(),
+                key=lambda kv: float(kv[1][0].get("score", 0.0) or 0.0) if kv[1] else -999.0,
+                reverse=True,
+            )
+            for item in items
+        ]
+        ranked.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     if ranked and int(shortlist_offset or 0) > 0:
         offset = int(shortlist_offset) % len(ranked)
         if offset > 0:
@@ -3097,12 +3979,50 @@ def build_candidate_shortlist(
         setattr(agent, "_last_candidate_scoring_map", scoring_map)
     core_k = max(1, int(top_k))
     if not ranked:
-        return []
+        return _persist_pool_stats(
+            selected_rows=[],
+            ranked_size=0,
+            stage1_pool_size=0,
+            blocked_fake_hot_count=0,
+            stage2_fill_size=0,
+        )
 
     selected = []
     selected_ids = set()
     pool_limit = max(core_k * 4, 12)
-    pool = ranked[:pool_limit]
+    provisional_pool = ranked[:pool_limit]
+    bucket_pool_map: Dict[str, List[Dict[str, object]]] = {}
+    for item in provisional_pool:
+        bucket_pool_map.setdefault(str(item.get("bucket_id", "UNK_NOSCHOOL_JUST")), []).append(item)
+    pool = []
+    blocked_fake_hot_items: List[Dict[str, object]] = []
+    fake_hot_blocked_pool_count = 0
+    for item in provisional_pool:
+        heat_state = dict(item.get("heat_state", {}) or {})
+        bucket_id = str(item.get("bucket_id", "UNK_NOSCHOOL_JUST"))
+        siblings = bucket_pool_map.get(bucket_id, [])
+        has_cool_sibling = any(
+            not bool((sib.get("heat_state") or {}).get("is_fake_hot", False))
+            and int((sib.get("listing") or {}).get("property_id", -1)) != int((item.get("listing") or {}).get("property_id", -1))
+            for sib in siblings
+        )
+        if (
+            bool(fake_hot_circuit_enabled)
+            and bool(heat_state.get("is_fake_hot", False))
+            and bool(has_cool_sibling)
+        ):
+            fake_hot_blocked_pool_count += 1
+            blocked_fake_hot_items.append(item)
+            continue
+        pool.append(item)
+    min_preserve_target = max(core_k, int(fake_hot_pool_preserve_min))
+    if len(pool) < min_preserve_target:
+        for item in blocked_fake_hot_items:
+            pool.append(item)
+            if len(pool) >= min_preserve_target:
+                break
+    if len(pool) < core_k:
+        pool = list(provisional_pool)
     buckets = {}
     for item in pool:
         buckets.setdefault(item["key"], []).append(item)
@@ -3118,11 +4038,17 @@ def build_candidate_shortlist(
         pid = int(listing.get("property_id", -1))
         if pid in selected_ids:
             return False
+        cluster_key = str(item.get("key", "UNK:UNK"))
+        if cluster_counts.get(cluster_key, 0) >= int(candidate_diversity_cluster_cap):
+            return False
         listing["candidate_bucket_id"] = str(item.get("bucket_id", "UNK_NOSCHOOL_JUST"))
         listing["candidate_bucket_key"] = str(item.get("key", "UNK:UNK"))
         selected.append(listing)
         selected_ids.add(pid)
+        cluster_counts[cluster_key] = int(cluster_counts.get(cluster_key, 0) + 1)
         return True
+
+    cluster_counts: Dict[str, int] = {}
 
     if zone_min_slots > 0:
         zone_groups: Dict[str, List[Dict[str, object]]] = {}
@@ -3194,8 +4120,22 @@ def build_candidate_shortlist(
             _append_from_item(item)
             if len(selected) >= core_k:
                 break
+    if len(selected) < core_k:
+        for item in ranked:
+            listing = dict(item["listing"] or {})
+            pid = int(listing.get("property_id", -1))
+            if pid in selected_ids:
+                continue
+            listing["candidate_bucket_id"] = str(item.get("bucket_id", "UNK_NOSCHOOL_JUST"))
+            listing["candidate_bucket_key"] = str(item.get("key", "UNK:UNK"))
+            selected.append(listing)
+            selected_ids.add(pid)
+            if len(selected) >= core_k:
+                break
 
     extra = max(0, int(exploration_slots))
+    if candidate_two_stage_enabled:
+        extra = min(int(extra), int(candidate_two_stage_max_stage2_fill))
     key_counter = {}
     for listing in selected:
         key_counter[_diversity_key(listing)] = int(key_counter.get(_diversity_key(listing), 0)) + 1
@@ -3203,7 +4143,13 @@ def build_candidate_shortlist(
     if dominant_ratio >= 0.8:
         extra = min(4, extra + 1)
     if extra <= 0 or len(ranked) <= core_k:
-        return selected
+        return _persist_pool_stats(
+            selected_rows=selected,
+            ranked_size=len(ranked),
+            stage1_pool_size=len(pool),
+            blocked_fake_hot_count=fake_hot_blocked_pool_count,
+            stage2_fill_size=0,
+        )
 
     remainder = []
     represented_keys = set(key_counter.keys())
@@ -3247,7 +4193,13 @@ def build_candidate_shortlist(
         alternate.sort(key=lambda x: x[0], reverse=True)
         if alternate:
             selected.append(alternate[0][1])
-    return selected
+    return _persist_pool_stats(
+        selected_rows=selected,
+        ranked_size=len(ranked),
+        stage1_pool_size=len(pool),
+        blocked_fake_hot_count=fake_hot_blocked_pool_count,
+        stage2_fill_size=max(0, len(selected) - core_k),
+    )
 
 
 def compute_dynamic_preference_weights(
@@ -3335,6 +4287,7 @@ def match_property_for_buyer(
     candidates = []
     is_smart = (decision_mode == "smart")
     excluded_property_ids = set(int(x) for x in (excluded_property_ids or set()) if x is not None)
+    current_match_month = int(getattr(buyer, "_current_matching_month", -1) or -1)
     crowd_profile = _resolve_crowd_behavior_profile(buyer, pref, config=config)
     crowd_mode = str(crowd_profile.get("mode", "neutral") or "neutral")
 
@@ -3365,6 +4318,10 @@ def match_property_for_buyer(
     except Exception:
         exploration_slots = 1
     configured_top_k = max(1, min(12, configured_top_k))
+    visible_shortlist_cap = _resolve_buyer_match_visible_shortlist_cap(
+        config=config,
+        configured_top_k=configured_top_k,
+    )
     force_full_visible_pool_enabled = True
     try:
         raw_force_full_visible_pool = (
@@ -3607,6 +4564,7 @@ def match_property_for_buyer(
     if not candidates:
         no_candidate_stats = _diagnose_no_candidate_filters()
         buyer._last_buyer_match_context = {
+            "matching_month": int(current_match_month),
             "strategy_profile": str(strategy_profile),
             "market_trend": str(market_trend),
             "visible_for_sale_count": int(len(visible_for_sale_pool)),
@@ -3798,6 +4756,7 @@ def match_property_for_buyer(
 
         if not shortlist:
             buyer._last_buyer_match_context = {
+                "matching_month": int(current_match_month),
                 "strategy_profile": str(strategy_profile),
                 "market_trend": str(market_trend),
                 "visible_for_sale_count": int(len(visible_for_sale_pool)),
@@ -3851,10 +4810,53 @@ def match_property_for_buyer(
             }
             return None
 
+    full_baseline_shortlist = list(baseline_shortlist)
+    full_shortlist = list(shortlist)
+    if int(visible_shortlist_cap) > 0:
+        shortlist = list(full_shortlist[:visible_shortlist_cap])
+    visible_shortlist_ids = [
+        int(c.get("property_id", -1))
+        for c in shortlist
+        if c.get("property_id") is not None
+    ]
+    full_shortlist_ids = [
+        int(c.get("property_id", -1))
+        for c in full_shortlist
+        if c.get("property_id") is not None
+    ]
+    reused_stop_ctx = _maybe_reuse_same_month_stop_signal(
+        buyer=buyer,
+        current_match_month=current_match_month,
+        retry_attempt=retry_attempt,
+        full_shortlist_ids=full_shortlist_ids,
+        visible_shortlist_ids=visible_shortlist_ids,
+        strategy_profile=strategy_profile,
+        market_trend=market_trend,
+        crowd_mode=crowd_mode,
+        config=config,
+    )
+    if reused_stop_ctx:
+        buyer._last_buyer_match_context = reused_stop_ctx
+        logger.info(
+            "💡 [买方初筛复用] 买家 %s(%s) 复用本月已明确的停搜决定，不再重复询问相似房单。",
+            buyer.name,
+            buyer.id,
+        )
+        return None
+
+    candidate_scoring_map = getattr(buyer, "_last_candidate_scoring_map", {}) or {}
+    candidate_pool_stats = getattr(buyer, "_last_candidate_pool_stats", {}) or {}
+    fake_hot_circuit_enabled = bool(candidate_pool_stats.get("fake_hot_circuit_enabled", False))
+    fake_hot_blocked_pool_count = int(candidate_pool_stats.get("fake_hot_blocked_pool_count", 0) or 0)
+    candidate_two_stage_enabled = bool(candidate_pool_stats.get("candidate_two_stage_enabled", False))
+    candidate_stage1_pool_size = int(candidate_pool_stats.get("stage1_pool_size", 0) or 0)
+    candidate_stage2_fill_size = int(candidate_pool_stats.get("stage2_fill_size", 0) or 0)
+
     # helper to format prop for prompt
     def format_prop(listing_data):
         p = properties_map.get(listing_data['property_id'])
         crowd_meta = _crowd_meta_for_listing(listing_data)
+        score_meta = candidate_scoring_map.get(int(listing_data.get("property_id", -1)), {})
         return {
             "id": listing_data['property_id'],
             "zone": p['zone'],
@@ -3869,12 +4871,12 @@ def match_property_for_buyer(
             "crowd_level": str(crowd_meta["crowd_level"]),
             "estimated_overlap_buyers": int(crowd_meta["estimated_overlap_buyers"]),
             "within_crowd_tolerance": bool(crowd_meta["within_tolerance"]),
+            "diversity_cluster_key": str(score_meta.get("diversity_cluster_key", "")),
         }
 
     props_info = [format_prop(c) for c in shortlist]
-    baseline_props_info = [format_prop(c) for c in baseline_shortlist]
+    baseline_props_info = [format_prop(c) for c in full_baseline_shortlist]
     shortlist_context = []
-    candidate_scoring_map = getattr(buyer, "_last_candidate_scoring_map", {}) or {}
     for c in shortlist:
         pid = int(c.get("property_id", -1))
         prop = properties_map.get(pid, {})
@@ -3894,9 +4896,14 @@ def match_property_for_buyer(
                 "score_components": {
                     "raw_rule_score": round(float(score_meta.get("raw_rule_score", 0.0) or 0.0), 4),
                     "dimension_utility": round(float(score_meta.get("dimension_utility", 0.0) or 0.0), 4),
+                    "substitute_spillover_bonus": round(float(score_meta.get("substitute_spillover_bonus", 0.0) or 0.0), 4),
+                    "market_spillover_bonus": round(float(score_meta.get("market_spillover_bonus", 0.0) or 0.0), 4),
                     "composite_score": round(float(score_meta.get("composite_score", 0.0) or 0.0), 4),
                 },
+                "heat_state": score_meta.get("heat_state", {}),
+                "substitute_spillover_meta": score_meta.get("substitute_spillover_meta", {}),
                 "bucket_id": str(score_meta.get("bucket_id", c.get("candidate_bucket_id", "") or _bucket_id_for_listing(c))),
+                "diversity_cluster_key": str(score_meta.get("diversity_cluster_key", "")),
                 "crowd_pressure_units": float(_crowd_meta_for_listing(c).get("pressure_units", 0.0)),
                 "crowd_level": str(_crowd_meta_for_listing(c).get("crowd_level", "LOW")),
                 "estimated_overlap_buyers": int(_crowd_meta_for_listing(c).get("estimated_overlap_buyers", 1)),
@@ -3906,6 +4913,7 @@ def match_property_for_buyer(
 
     shortlist_bucket_distribution = _bucket_distribution(shortlist)
     shortlist_size = int(len(shortlist))
+    shortlist_full_size = int(len(full_shortlist))
     main_quota = min(3, shortlist_size)
     secondary_quota = min(2, max(0, shortlist_size - main_quota))
     explore_quota = max(0, shortlist_size - main_quota - secondary_quota)
@@ -4025,7 +5033,11 @@ def match_property_for_buyer(
     若你坚持选择超过“拥挤容忍阈值”的房子，请在 reason 里说明坚持原因。
     如果不满意，可以不选 (null)。
     输出JSON: {{
-        "selected_property_id": int|null, 
+        "selected_property_id": int|null,
+        "backup_property_ids": [int, ...],
+        "rejected_property_feedback": [
+            {{"property_id": int, "reason_tag": "too_expensive|no_school|wrong_zone|size_too_large|size_too_small|inferior_same_cluster", "reason": "..."}} 
+        ],
         "thought_bubble": "1-2句内心独白，体现你在价格、学区等权重间的挣扎与最终妥协，用于在大屏气泡显示",
         "reason": "...",
         "monthly_intent": "CONTINUE"|"STOP"
@@ -4035,6 +5047,8 @@ def match_property_for_buyer(
     # Conservative fallback: abstain instead of forcing cheapest when LLM output is invalid.
     default_resp = {
         "selected_property_id": None,
+        "backup_property_ids": [],
+        "rejected_property_feedback": [],
         "thought_bubble": "信息不足，先观望。",
         "reason": "Default no-pick",
         "monthly_intent": "CONTINUE",
@@ -4072,6 +5086,44 @@ def match_property_for_buyer(
         school_need = bool(getattr(pref, "need_school_district", False))
         school_mixed = 1.0 if school_need and len(school_vals) > 1 else 0.0
         zone_mixed = 1.0 if len(zone_vals) > 1 else 0.0
+        try:
+            small_clear_case_cap = int(
+                config.get(
+                    "smart_agent.buyer_match_small_clear_case_cap",
+                    config.get("buyer_match_small_clear_case_cap", 4),
+                )
+            ) if config else 4
+        except Exception:
+            small_clear_case_cap = 4
+        try:
+            small_clear_case_price_span_cap = float(
+                config.get(
+                    "smart_agent.buyer_match_small_clear_case_price_span_cap",
+                    config.get("buyer_match_small_clear_case_price_span_cap", 0.08),
+                )
+            ) if config else 0.08
+        except Exception:
+            small_clear_case_price_span_cap = 0.08
+        try:
+            small_clear_case_budget_gap_cap = float(
+                config.get(
+                    "smart_agent.buyer_match_small_clear_case_budget_gap_cap",
+                    config.get("buyer_match_small_clear_case_budget_gap_cap", 0.10),
+                )
+            ) if config else 0.10
+        except Exception:
+            small_clear_case_budget_gap_cap = 0.10
+        small_clear_case_cap = max(2, min(5, int(small_clear_case_cap)))
+        small_clear_case_price_span_cap = max(0.01, min(0.20, float(small_clear_case_price_span_cap)))
+        small_clear_case_budget_gap_cap = max(0.01, min(0.25, float(small_clear_case_budget_gap_cap)))
+        if (
+            len(shortlist) <= int(small_clear_case_cap)
+            and len(zone_vals) <= 1
+            and (not school_need or len(school_vals) <= 1)
+            and p_span <= float(small_clear_case_price_span_cap)
+            and budget_gap <= float(small_clear_case_budget_gap_cap)
+        ):
+            return "fast", "small_homogeneous_shortlist", 0.0
         trend_uncertainty = 1.0 if str(market_trend or "").upper() in {"STABLE", "DOWN"} else 0.4
         shortlist_complexity = min(1.0, max(0.0, (len(shortlist) - 1) / 4.0))
 
@@ -4140,6 +5192,8 @@ def match_property_for_buyer(
     else:
         result = safe_call_llm(prompt, default_resp, model_type=route_model)
     selected_id = result.get("selected_property_id")
+    raw_backup_ids = list(result.get("backup_property_ids", []) or [])
+    raw_rejected_feedback = list(result.get("rejected_property_feedback", []) or [])
     thought_bubble = result.get("thought_bubble", "...")
     reason = result.get("reason", "未提供理由")
     monthly_intent = str(result.get("monthly_intent", "CONTINUE") or "CONTINUE").strip().upper()
@@ -4152,6 +5206,57 @@ def match_property_for_buyer(
         selected_id = None
         reason = "selected_property_excluded_by_crowd_hard_rule"
         thought_bubble = "这套房竞争太拥挤，先换下一套。"
+
+    shortlist_prop_index = {
+        int(item.get("property_id", -1)): dict(item)
+        for item in shortlist_context
+        if item.get("property_id") is not None
+    }
+    backup_property_ids: List[int] = []
+    for raw_pid in raw_backup_ids:
+        try:
+            backup_pid = int(raw_pid)
+        except Exception:
+            continue
+        if backup_pid == int(selected_id or -1):
+            continue
+        if backup_pid not in shortlist_prop_index:
+            continue
+        if backup_pid in backup_property_ids:
+            continue
+        backup_property_ids.append(backup_pid)
+        if len(backup_property_ids) >= 2:
+            break
+
+    rejected_property_feedback: List[Dict[str, object]] = []
+    seen_rejected_ids: Set[int] = set()
+    for entry in raw_rejected_feedback:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            rejected_pid = int(entry.get("property_id"))
+        except Exception:
+            continue
+        if rejected_pid == int(selected_id or -1):
+            continue
+        if rejected_pid in seen_rejected_ids or rejected_pid not in shortlist_prop_index:
+            continue
+        shortlist_meta = shortlist_prop_index[rejected_pid]
+        rejected_property_feedback.append(
+            {
+                "property_id": rejected_pid,
+                "reason_tag": _normalize_counterfactual_reason_tag(entry.get("reason_tag")),
+                "reason": str(entry.get("reason", "") or ""),
+                "cluster_key": str(shortlist_meta.get("diversity_cluster_key", "") or ""),
+                "listed_price": float(shortlist_meta.get("listed_price", 0.0) or 0.0),
+                "building_area": float(shortlist_meta.get("area", 0.0) or 0.0),
+                "zone": str(shortlist_meta.get("zone", "") or ""),
+                "is_school_district": bool(shortlist_meta.get("is_school_district", False)),
+            }
+        )
+        seen_rejected_ids.add(rejected_pid)
+        if len(rejected_property_feedback) >= 3:
+            break
 
 
     crowd_guard_action = "none"
@@ -4186,6 +5291,14 @@ def match_property_for_buyer(
         and precheck_reselect_enabled
         and crowd_mode != "follow"
         and precheck_max_reselect_rounds > 0
+        and _should_run_buyer_crowd_reselect(
+            route_model=str(route_model),
+            selected_crowd_units=float(selected_crowd_units),
+            crowd_tolerance_units=float(crowd_tolerance_units),
+            low_crowd_alternative_count=int(low_crowd_alternative_count),
+            retry_attempt=int(retry_attempt),
+            config=config,
+        )
     ):
         alternatives_payload = []
         for c in shortlist:
@@ -4270,6 +5383,7 @@ def match_property_for_buyer(
     selected_property = properties_map.get(int(selected_id), {}) if selected_id else {}
 
     buyer._last_buyer_match_context = {
+        "matching_month": int(current_match_month),
         "persona_snapshot": {
             "purchase_motive_primary": str(getattr(buyer.story, "purchase_motive_primary", "") or ""),
             "housing_stage": str(getattr(buyer.story, "housing_stage", "") or ""),
@@ -4287,6 +5401,8 @@ def match_property_for_buyer(
         "crowd_floor_min_keep": int(crowd_floor_min_keep),
         "crowd_floor_fallback_applied": bool(crowd_floor_fallback_applied),
         "crowd_floor_fallback_added": int(crowd_floor_fallback_added),
+        "fake_hot_circuit_enabled": bool(fake_hot_circuit_enabled),
+        "fake_hot_blocked_pool_count": int(fake_hot_blocked_pool_count),
         "crowd_tolerance_units": float(crowd_tolerance_units),
         "selected_crowd_units": float(selected_crowd_units),
         "selected_estimated_overlap_buyers": int(selected_estimated_overlap),
@@ -4303,6 +5419,10 @@ def match_property_for_buyer(
             "secondary_quota": int(secondary_quota),
             "explore_quota": int(explore_quota),
             "total_shortlist_size": int(shortlist_size),
+            "total_shortlist_full_size": int(shortlist_full_size),
+            "candidate_two_stage_enabled": bool(candidate_two_stage_enabled),
+            "stage1_pool_size": int(candidate_stage1_pool_size),
+            "stage2_fill_size": int(candidate_stage2_fill_size),
         },
         "bucket_distribution": shortlist_bucket_distribution,
         "pipeline_stage_trace": pipeline_stage_trace,
@@ -4313,8 +5433,12 @@ def match_property_for_buyer(
             "effective_price_sensitivity": effective_price_sensitivity,
         },
         "market_trend": str(market_trend),
-        "baseline_shortlist_property_ids": [int(c.get("property_id", -1)) for c in baseline_shortlist if c.get("property_id") is not None],
-        "shortlist_property_ids": [int(c.get("property_id", -1)) for c in shortlist if c.get("property_id") is not None],
+        "baseline_shortlist_property_ids": [int(c.get("property_id", -1)) for c in full_baseline_shortlist if c.get("property_id") is not None],
+        "shortlist_property_ids": [int(c.get("property_id", -1)) for c in full_shortlist if c.get("property_id") is not None],
+        "shortlist_visible_property_ids": [int(c.get("property_id", -1)) for c in shortlist if c.get("property_id") is not None],
+        "shortlist_full_size": int(shortlist_full_size),
+        "shortlist_visible_size": int(shortlist_size),
+        "buyer_match_visible_shortlist_cap": int(visible_shortlist_cap),
         "shortlist": shortlist_context,
         "shortlist_crowd_snapshot": [
             {
@@ -4337,7 +5461,20 @@ def match_property_for_buyer(
         "shortlist_rotation_step": int(shortlist_rotation_step),
         "shortlist_offset": int(shortlist_offset),
         "selected_property_id": int(selected_id) if selected_id else None,
+        "selected_diversity_cluster_key": str(
+            next(
+                (
+                    item.get("diversity_cluster_key", "")
+                    for item in shortlist_context
+                    if int(item.get("property_id", -1)) == int(selected_id or -1)
+                ),
+                "",
+            )
+            or ""
+        ),
         "selected_in_shortlist": bool(selected_in_shortlist),
+        "backup_property_ids": [int(x) for x in backup_property_ids],
+        "rejected_property_feedback": rejected_property_feedback,
         "selection_reason": str(reason),
         "llm_monthly_intent": str(monthly_intent),
         "stop_search_this_month": bool((not selected_id) and monthly_intent == "STOP"),
@@ -4355,9 +5492,6 @@ def match_property_for_buyer(
         "llm_called": bool(llm_called_flag),
     }
 
-    import logging
-    logger = logging.getLogger(__name__)
-    
     if selected_id:
         logger.info(f"💡 [买方初筛] 买家 {buyer.name}({buyer.id}) 选中房产 {selected_id}。内心戏:【{thought_bubble}】")
         for c in shortlist:
@@ -4687,8 +5821,9 @@ def match_properties_for_buyer(
 
     current_match_month = int(getattr(buyer, "_current_matching_month", -1) or -1)
     previous_month_attempted_ids: Set[int] = set()
+    current_month_seen_ids: Set[int] = set()
+    attempted_history = getattr(buyer, "_attempted_property_ids_by_month", {}) or {}
     if current_match_month > 1:
-        attempted_history = getattr(buyer, "_attempted_property_ids_by_month", {}) or {}
         if isinstance(attempted_history, dict):
             prev_month_raw = attempted_history.get(int(current_match_month - 1), [])
             for pid in (prev_month_raw or []):
@@ -4696,6 +5831,18 @@ def match_properties_for_buyer(
                     previous_month_attempted_ids.add(int(pid))
                 except Exception:
                     continue
+    if current_match_month > 0 and isinstance(attempted_history, dict):
+        current_month_raw = attempted_history.get(int(current_match_month), [])
+        for pid in (current_month_raw or []):
+            try:
+                current_month_seen_ids.add(int(pid))
+            except Exception:
+                continue
+    for pid in (getattr(buyer, "_same_month_seen_property_ids", []) or []):
+        try:
+            current_month_seen_ids.add(int(pid))
+        except Exception:
+            continue
     repriced_reentry_ids: Set[int] = set()
     for pid in (getattr(buyer, "_repriced_reentry_property_ids", []) or []):
         try:
@@ -4707,10 +5854,14 @@ def match_properties_for_buyer(
             int(pid) for pid in previous_month_attempted_ids
             if int(pid) not in repriced_reentry_ids
         }
+        current_month_seen_ids = {
+            int(pid) for pid in current_month_seen_ids
+            if int(pid) not in repriced_reentry_ids
+        }
 
     selected = []
     selected_ids = set()
-    attempted_ids: Set[int] = set(previous_month_attempted_ids)
+    attempted_ids: Set[int] = set(previous_month_attempted_ids) | set(current_month_seen_ids)
     attempted_this_month: Set[int] = set()
     retry_trace: List[Dict[str, object]] = []
     attempts_spent = 0
@@ -4842,6 +5993,15 @@ def match_properties_for_buyer(
                 )
                 chosen = None
                 continue
+            exposed_ids = []
+            for exposed_pid in (chosen_ctx.get("shortlist_visible_property_ids", []) or []):
+                try:
+                    exposed_ids.append(int(exposed_pid))
+                except Exception:
+                    continue
+            for exposed_pid in exposed_ids:
+                attempted_ids.add(int(exposed_pid))
+                attempted_this_month.add(int(exposed_pid))
             try:
                 attempted_ids.add(int(chosen.get("property_id")))
                 attempted_this_month.add(int(chosen.get("property_id")))
@@ -4861,6 +6021,15 @@ def match_properties_for_buyer(
 
         if not chosen:
             last_ctx = dict(getattr(buyer, "_last_buyer_match_context", {}) or {})
+            exposed_ids = []
+            for exposed_pid in (last_ctx.get("shortlist_visible_property_ids", []) or []):
+                try:
+                    exposed_ids.append(int(exposed_pid))
+                except Exception:
+                    continue
+            for exposed_pid in exposed_ids:
+                attempted_ids.add(int(exposed_pid))
+                attempted_this_month.add(int(exposed_pid))
             llm_stop_now = bool(last_ctx.get("stop_search_this_month", False))
             structural_no_candidate = bool(
                 last_ctx
@@ -5118,6 +6287,141 @@ def _resolve_negotiation_route(seller: Agent, buyers: List[Agent], listing: Dict
     }
 
 
+def _should_run_buyer_crowd_reselect(
+    *,
+    route_model: str,
+    selected_crowd_units: float,
+    crowd_tolerance_units: float,
+    low_crowd_alternative_count: int,
+    retry_attempt: int,
+    config=None,
+) -> bool:
+    """
+    Run the extra reselect prompt only for genuine gray/extreme crowd cases.
+    This never replaces the buyer's original choice with code; it only decides
+    whether an extra LLM recheck is worth spending tokens on.
+    """
+    if low_crowd_alternative_count <= 0:
+        return False
+    tolerance = float(crowd_tolerance_units or 0.0)
+    selected_units = float(selected_crowd_units or 0.0)
+    if selected_units <= tolerance + 1e-9:
+        return False
+
+    try:
+        fast_extreme_enabled = bool(
+            config.get(
+                "smart_agent.candidate_crowd_precheck_fast_extreme_enabled",
+                config.get("candidate_crowd_precheck_fast_extreme_enabled", True),
+            )
+        ) if config else True
+    except Exception:
+        fast_extreme_enabled = True
+    try:
+        severe_multiplier = float(
+            config.get(
+                "smart_agent.candidate_crowd_precheck_fast_extreme_multiplier",
+                config.get("candidate_crowd_precheck_fast_extreme_multiplier", 1.60),
+            )
+        ) if config else 1.60
+    except Exception:
+        severe_multiplier = 1.60
+    try:
+        fast_min_alternatives = int(
+            config.get(
+                "smart_agent.candidate_crowd_precheck_fast_extreme_min_alternatives",
+                config.get("candidate_crowd_precheck_fast_extreme_min_alternatives", 3),
+            )
+        ) if config else 3
+    except Exception:
+        fast_min_alternatives = 3
+    try:
+        smart_max_retry = int(
+            config.get(
+                "smart_agent.candidate_crowd_precheck_smart_max_retry_attempt",
+                config.get("candidate_crowd_precheck_smart_max_retry_attempt", 1),
+            )
+        ) if config else 1
+    except Exception:
+        smart_max_retry = 1
+    try:
+        fast_max_retry = int(
+            config.get(
+                "smart_agent.candidate_crowd_precheck_fast_max_retry_attempt",
+                config.get("candidate_crowd_precheck_fast_max_retry_attempt", 0),
+            )
+        ) if config else 0
+    except Exception:
+        fast_max_retry = 0
+
+    retry_i = int(retry_attempt or 0)
+    if str(route_model or "").lower() == "smart":
+        return retry_i <= max(0, smart_max_retry)
+
+    if not fast_extreme_enabled:
+        return False
+
+    extreme_crowd = selected_units >= max(tolerance * max(1.05, severe_multiplier), tolerance + 1.0)
+    return (
+        extreme_crowd
+        and int(low_crowd_alternative_count or 0) >= max(1, fast_min_alternatives)
+        and retry_i <= max(0, fast_max_retry)
+    )
+
+
+def _should_run_competitive_seller_recheck(
+    *,
+    route_model: str,
+    bid_count: int,
+    spread_ratio: float,
+    round_index: int,
+    total_rounds: int,
+    config=None,
+) -> bool:
+    """
+    Only spend an extra seller recheck call on genuine gray or tightly clustered
+    competitive sessions.
+    """
+    if int(round_index) >= int(total_rounds):
+        return False
+    if int(bid_count) < 2:
+        return False
+    if str(route_model or "").lower() == "smart":
+        return True
+
+    try:
+        fast_enabled = bool(
+            config.get(
+                "smart_agent.classic_competitive_seller_recheck_fast_enabled",
+                config.get("classic_competitive_seller_recheck_fast_enabled", True),
+            )
+        ) if config else True
+    except Exception:
+        fast_enabled = True
+    if not fast_enabled:
+        return False
+    try:
+        max_spread = float(
+            config.get(
+                "smart_agent.classic_competitive_seller_recheck_fast_spread_cap",
+                config.get("classic_competitive_seller_recheck_fast_spread_cap", 0.03),
+            )
+        ) if config else 0.03
+    except Exception:
+        max_spread = 0.03
+    try:
+        min_buyers = int(
+            config.get(
+                "smart_agent.classic_competitive_seller_recheck_fast_min_buyers",
+                config.get("classic_competitive_seller_recheck_fast_min_buyers", 4),
+            )
+        ) if config else 4
+    except Exception:
+        min_buyers = 4
+
+    return int(bid_count) >= max(2, min_buyers) and float(spread_ratio or 0.0) <= max(0.0, max_spread)
+
+
 def _arbiter_negotiate_sync(
     buyer: Agent,
     seller: Agent,
@@ -5292,6 +6596,7 @@ async def _run_classic_competitive_async(
     buyers: List[Agent],
     listing: Dict,
     market: Market,
+    month: int = 1,
     config=None,
     llm_model_type: str = "fast",
 ) -> Dict:
@@ -5328,7 +6633,7 @@ async def _run_classic_competitive_async(
         max_active_buyers = 6
     max_active_buyers = max(2, min(20, max_active_buyers))
 
-    macro_context = build_macro_context(1, config)
+    macro_context = build_macro_context(month, config)
     history: List[Dict] = []
     active_buyers: List[Agent] = list(buyers)
     last_round_offers: Dict[int, float] = {}
@@ -5447,6 +6752,17 @@ async def _run_classic_competitive_async(
             if best_offer_so_far is not None:
                 best_buyer = best_offer_so_far["buyer"]
                 best_price = float(best_offer_so_far["price"])
+                if best_price < float(min_price):
+                    history.append({
+                        "round": r,
+                        "party": "seller_closeout",
+                        "agent_id": int(getattr(seller, "id", -1)),
+                        "action": "REJECT",
+                        "price": float(best_price),
+                        "content": "closeout_auto_reject_below_min_price",
+                        "llm_called": 0,
+                    })
+                    return {"outcome": "failed", "reason": "Best historical bid below min price", "history": history, "final_price": 0}
                 closeout_prompt = f"""
                 你是卖方Agent {seller.id}。当前第{r}/{rounds}轮没有新增有效报价。
                 历史最优有效报价来自买家 {int(getattr(best_buyer, "id", -1))}，价格 {best_price:,.0f}。
@@ -5583,7 +6899,17 @@ async def _run_classic_competitive_async(
 
         # Recheck early one-shot decisions once (LLM still decides), to increase
         # signal for multi-round competition in high-interest sessions.
-        if r < rounds and len(this_round_bids) >= 2 and seller_action in {"ACCEPT", "REJECT"}:
+        if (
+            seller_action in {"ACCEPT", "REJECT"}
+            and _should_run_competitive_seller_recheck(
+                route_model=str(route_info.get("model", "")),
+                bid_count=int(len(this_round_bids)),
+                spread_ratio=float(abs(top_price - second_price) / max(top_price, 1.0)),
+                round_index=int(r),
+                total_rounds=int(rounds),
+                config=config,
+            )
+        ):
             spread_ratio = abs(top_price - second_price) / max(top_price, 1.0)
             recheck_prompt = f"""
             你正在复核第{r}/{rounds}轮决策（多人竞争同一房源）。
@@ -5687,6 +7013,17 @@ async def _run_classic_competitive_async(
     if best_offer_so_far is not None:
         best_buyer = best_offer_so_far["buyer"]
         best_price = float(best_offer_so_far["price"])
+        if best_price < float(min_price):
+            history.append({
+                "round": rounds,
+                "party": "seller_closeout",
+                "agent_id": int(getattr(seller, "id", -1)),
+                "action": "REJECT",
+                "price": float(best_price),
+                "content": "closeout_auto_reject_below_min_price",
+                "llm_called": 0,
+            })
+            return {"outcome": "failed", "reason": "Best historical bid below min price", "history": history, "final_price": 0}
         closeout_prompt = f"""
         你是卖方Agent {seller.id}。已达到最大轮次 {rounds}。
         历史最优有效报价来自买家 {int(getattr(best_buyer, "id", -1))}，价格 {best_price:,.0f}。
@@ -5721,7 +7058,15 @@ async def _run_classic_competitive_async(
     return {"outcome": "failed", "reason": "Max rounds reached", "history": history, "final_price": 0}
 
 
-def negotiate(buyer: Agent, seller: Agent, listing: Dict, market: Market, potential_buyers_count: int = 10, config=None) -> Dict:
+def negotiate(
+    buyer: Agent,
+    seller: Agent,
+    listing: Dict,
+    market: Market,
+    potential_buyers_count: int = 10,
+    config=None,
+    month: int = 1,
+) -> Dict:
     """
     LLM-driven negotiation with Market Context, Configurable Rounds, and Personality.
     """
@@ -5759,7 +7104,7 @@ def negotiate(buyer: Agent, seller: Agent, listing: Dict, market: Market, potent
     market_hint = cond_cfg.get('llm_hint', "【市场供需平衡】供需相当，价格理性。")
 
     # Macro Environment Context
-    macro_context = build_macro_context(1, config)  # Month is not passed effectively here, defaulting to 1 or need to pass in
+    macro_context = build_macro_context(month, config)
 
     arbiter_cfg = _resolve_arbiter_mode(config)
     if arbiter_cfg["enabled"]:
@@ -6061,6 +7406,7 @@ async def negotiate_async(
     market: Market,
     potential_buyers_count: int = 10,
     config=None,
+    month: int = 1,
     llm_model_type: str = "fast",
 ) -> Dict:
     """
@@ -6095,7 +7441,7 @@ async def negotiate_async(
     lowball_ratio = cond_cfg.get('buyer_lowball', 0.90)
     market_hint = cond_cfg.get('llm_hint', "【市场供需平衡】供需相当，价格理性。")
 
-    macro_context = build_macro_context(1, config)
+    macro_context = build_macro_context(month, config)
     arbiter_cfg = _resolve_arbiter_mode(config)
     if arbiter_cfg["enabled"]:
         return await _arbiter_negotiate_async(
@@ -6405,6 +7751,7 @@ def execute_transaction(
     market: Market = None,
     config=None,
     skip_affordability_check: bool = False,
+    transaction_month: int | None = None,
 ) -> Optional[Dict]:
     """
     Execute transaction: Transfer ownership, handle money (Cash + Mortgage).
@@ -6497,6 +7844,8 @@ def execute_transaction(
     new_prop_data['owner_id'] = buyer.id
     new_prop_data['status'] = 'off_market'
     new_prop_data['last_transaction_price'] = final_price
+    if transaction_month is not None:
+        new_prop_data['acquired_month'] = int(transaction_month)
     # Inherit or reset other fields? base_value might update to transaction price?
     # Usually base_value tracks market value, transaction price is history.
     # Let's update base_value to reflect market recognition?
@@ -6511,6 +7860,8 @@ def execute_transaction(
     property_data['owner_id'] = buyer.id
     property_data['status'] = 'off_market'
     property_data['last_transaction_price'] = final_price
+    if transaction_month is not None:
+        property_data['acquired_month'] = int(transaction_month)
 
     logger.info(f"Transaction Executed: Unit {pid} sold from {seller.name}({seller.id}) to {buyer.name}({buyer.id}) @ {final_price:,.0f}")
 

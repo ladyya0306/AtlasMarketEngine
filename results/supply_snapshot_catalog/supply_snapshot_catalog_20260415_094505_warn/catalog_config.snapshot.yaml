@@ -1,0 +1,72 @@
+catalog:
+  catalog_id: supply_snapshot_catalog_v1
+  version: 1
+  recommended_snapshot_id: spindle_medium
+  description: "固定房产供应盘目录。用于在不改交易主链和 LLM 决策边界的前提下，先把供给结构定量化。"
+
+base_profile_pack:
+  path: config/line_a_profile_pack_v2_template.yaml
+  experiment_mode: abundant
+
+property_bucket_tiers:
+  CORE_STRONG_SCHOOL_STARTER: starter
+  CORE_STRONG_SCHOOL_IMPROVE: improve
+  CORE_NONSCHOOL_IMPROVE: improve
+  CORE_LUXURY_PRESERVATION: luxury
+  SUBCORE_GENERAL_SCHOOL_STARTER: starter
+  SUBCORE_NONSCHOOL_STARTER: starter
+  SUBCORE_IMPROVE_FAMILY: improve
+  PERIPHERAL_COST_STARTER: starter
+  PERIPHERAL_MULTI_CHILD_LARGE: improve
+  SENIOR_FRIENDLY_COMFORT: improve
+
+structure_families:
+  spindle:
+    description: "梭子型结构：中间改善与主流需求更厚，两端保留但不过度堆积。"
+    tier_scale_map:
+      starter: 0.95
+      improve: 1.15
+      luxury: 0.65
+  pyramid:
+    description: "金字塔结构：刚需与入门盘更厚，高端盘更薄。"
+    tier_scale_map:
+      starter: 1.20
+      improve: 0.95
+      luxury: 0.45
+
+size_profiles:
+  minimum:
+    description: "最小样本：用于机制排查、候选链路和回归测试。"
+    count_scale: 0.45
+  medium:
+    description: "适中样本：推荐默认研究盘。"
+    count_scale: 1.00
+  large:
+    description: "较大样本：用于更稳定的多月桥接和压力实验。"
+    count_scale: 1.80
+
+presets:
+  - snapshot_id: spindle_minimum
+    structure_family: spindle
+    size_profile: minimum
+    recommended_use: "最小回归 / 机制排查"
+  - snapshot_id: spindle_medium
+    structure_family: spindle
+    size_profile: medium
+    recommended_use: "默认基准盘 / A-B 桥接研究"
+  - snapshot_id: spindle_large
+    structure_family: spindle
+    size_profile: large
+    recommended_use: "长测前稳定性复查"
+  - snapshot_id: pyramid_minimum
+    structure_family: pyramid
+    size_profile: minimum
+    recommended_use: "最小样本金字塔对照"
+  - snapshot_id: pyramid_medium
+    structure_family: pyramid
+    size_profile: medium
+    recommended_use: "供给结构敏感性对照"
+  - snapshot_id: pyramid_large
+    structure_family: pyramid
+    size_profile: large
+    recommended_use: "高供给梯度压力测试"

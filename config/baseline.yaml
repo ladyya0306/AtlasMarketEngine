@@ -550,6 +550,8 @@ smart_agent:
   # [系统控制] 多套交易上限
   max_buys_per_month: 3
   max_sells_per_month: 2
+  # [硬规则] 新买入房产最短持有期（月）；持有未满时禁止再次挂牌出售
+  min_holding_months_before_resale: 12
 
   # [系统控制] 抢购机制
   bid_aggressiveness: 0.5   # 0~1，越高越积极
@@ -640,6 +642,24 @@ smart_agent:
   candidate_cold_listing_age_gate_months: 1
   candidate_pressure_bonus_step: 0.05
   candidate_pressure_bonus_cap: 3.0
+  # [系统控制] 假热房治理：高曝光低承接房优先降权/熔断，同桶兄弟房优先补位
+  candidate_fake_hot_circuit_enabled: true
+  candidate_fake_hot_lookback_months: 2
+  candidate_fake_hot_historical_match_threshold: 10
+  candidate_fake_hot_negotiation_ratio_threshold: 0.20
+  candidate_fake_hot_same_month_quota_threshold: 4
+  candidate_fake_hot_score_penalty: 0.28
+  candidate_fake_hot_pool_preserve_min: 3
+  candidate_sibling_rotation_bonus: 0.14
+  candidate_diversity_cluster_cap: 2
+  candidate_counterfactual_feedback_enabled: true
+  candidate_counterfactual_reject_penalty: 0.28
+  candidate_counterfactual_same_cluster_penalty: 0.12
+  candidate_counterfactual_reason_penalty: 0.08
+  # [系统控制] 双阶段候选：先扩发现层，再缩成最终可见 shortlist 交给 LLM
+  candidate_two_stage_enabled: true
+  candidate_two_stage_min_stage1_pool: 4
+  candidate_two_stage_max_stage2_fill: 6
   # [系统控制] ROLE_DECISION降耗优化（仅做预路由，不替代LLM交易决策）
   role_decision_optimization:
     # 开启“不确定带路由”：低分直接OBSERVER，其他进入候选
@@ -692,6 +712,23 @@ smart_agent:
   max_negotiation_rounds_cap: 4
   # [系统控制] 经典多人竞争中，若最高有效报价达到/超过挂牌价，自动成交（避免“高于挂牌仍拒绝”）
   classic_competitive_auto_accept_at_list_enabled: true
+  # [系统控制] 热房自动竞价：明确高热盘可直接切到更强竞争模式
+  hot_listing_auto_bidding_enabled: true
+  hot_listing_auto_bidding_min_buyers: 3
+  hot_listing_auto_bidding_min_recent_matches: 8
+  hot_listing_auto_bidding_min_heat_score: 0.60
+  hot_listing_auto_bidding_mode: BATCH
+  # [系统控制] 只有真竞争才能触发强制拍卖；假热房禁止触发竞价/提价
+  true_competition_force_auction_enabled: true
+  true_competition_force_auction_min_buyers: 2
+  true_competition_force_auction_min_commitments: 2
+  true_competition_force_auction_min_competitions: 2
+  true_competition_force_auction_mode: BATCH
+  fake_hot_block_auction_enabled: true
+  fake_hot_block_raise_enabled: true
+  # [系统控制] 多人近价决胜灰区路由：只决定 fast/smart，不替代卖家最终选择
+  batch_tie_break_dual_routing_enabled: true
+  batch_tie_break_gray_score_threshold: 0.50
   max_holdings_in_downtrend: 6
   max_downtrend_buys_per_month: 1
   max_downtrend_sells_per_month: 1

@@ -32,7 +32,7 @@ class ReportingService:
         Generate end-of-simulation reports for ALL agents.
         Returns count of reports generated.
         """
-        logger.info(f"Generating Agent End Reports for Month {month}...")
+        logger.info(f"Generating Agent End Reports for Round {month}...")
 
         # 1. Get all Agent IDs
         cursor = self.conn.cursor()
@@ -133,7 +133,7 @@ class ReportingService:
         decisions = data['decisions']
 
         # Simplify data for prompt
-        tx_summary = ", ".join([f"Month {t['month']} {t['type']} 房产{t['property_id']} ({t['final_price'] / 10000:.0f}万)" for t in txs]) if txs else "无交易"
+        tx_summary = ", ".join([f"回合{t['month']} {t['type']} 房产{t['property_id']} ({t['final_price'] / 10000:.0f}万)" for t in txs]) if txs else "无交易"
 
         prompt = f"""
         你是一位犀利的房地产观察家。请为以下 Agent 撰写一段【人物画像/投资风格辣评】（100字左右）。
